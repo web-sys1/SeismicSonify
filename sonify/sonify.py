@@ -8,6 +8,7 @@ import colorcet as cc
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.animation as anim
 from matplotlib.animation import FuncAnimation
 from matplotlib.gridspec import GridSpec
 from matplotlib.offsetbox import AnchoredText
@@ -16,6 +17,9 @@ from scipy import signal
 
 plt.ioff()
 
+cl = 'grey'
+
+anim.writers['ffmpeg']
 
 LOWEST_AUDIBLE_FREQUENCY = 20  # [Hz]
 HIGHEST_AUDIBLE_FREQUENCY = 20000  # [Hz]
@@ -38,18 +42,22 @@ EXTENDFRAC = 0.05
 
 
 def sonify(
+    fdsn,
     network,
     station,
     channel,
     starttime,
     endtime,
+    base_url=False,
     location='*',
     freqmin=None,
     freqmax=None,
+    TmB=None,
     speed_up_factor=200,
     fps=1,
     output_dir=None,
     spec_win_dur=5,
+    specOpts='',
     db_lim=None,
 ):
     """
@@ -86,8 +94,14 @@ def sonify(
         output_dir = os.getcwd()
 
     pad = (endtime - starttime) * TAPER
+    
+    fdsn_client = str(fdsn)
+    
+    if base_url == True:
+      client = Client(base_url=fdsn_client)
+    elif not base_url:
+      client = Client(fdsn_client)
 
-    client = Client('http://localhost:8080')
 
     print('Retrieving data...')
     st = client.get_waveforms(
@@ -109,15 +123,21 @@ def sonify(
     # All infrasound sensors have a "?DF" channel pattern
     if tr.stats.channel[1:3] == 'DF':
         is_infrasound = True
+        print("Has infrasound?", is_infrasound)
     # All high-gain seismometers have a "?H?" channel pattern
     elif tr.stats.channel[1] == 'H':
         is_infrasound = False
+        print("Has infrasound?", is_infrasound)
+
     # We can't figure out what type of sensor this is...
     else:
         raise ValueError(
             f'Channel {tr.stats.channel} is not an infrasound or seismic channel!'
         )
-
+    
+    if TmB == None:
+       raise IndexError('Timebox (TmB) bool is missing. Must be either True or False.')    
+     
     if not freqmax:
         freqmax = np.min(
             [tr.stats.sampling_rate / 2, HIGHEST_AUDIBLE_FREQUENCY / speed_up_factor]
@@ -165,9 +185,12 @@ def sonify(
         starttime,
         endtime,
         is_infrasound,
+        timeBox=TmB,
         win_dur=spec_win_dur,
         db_lim=db_lim,
         freq_lim=(freqmin, freqmax),
+        specOpts=specOpts,
+        fileName=tr.id
     )
 
     # Create animation
@@ -181,7 +204,7 @@ def sonify(
         blit=True,
     )
 
-    video_filename = os.path.join(output_dir, 'sonify-tmp.mp4')
+    video_filename = 'sonify-tmp.mp4'
     print('Saving animation. This may take a while...')
     animation.save(
         video_filename,
@@ -207,7 +230,7 @@ def sonify(
 
 
 def _spectrogram(
-    tr, starttime, endtime, is_infrasound, win_dur=5, db_lim=None, freq_lim=None
+    tr, starttime, endtime, is_infrasound, win_dur=5, timeBox=False, db_lim=None, freq_lim=None, specOpts='', fileName=''
 ):
     """
     Make a combination waveform and spectrogram plot for an infrasound or
@@ -253,7 +276,10 @@ def _spectrogram(
     t_mpl = tr.stats.starttime.matplotlib_date + (t / mdates.SEC_PER_DAY)
 
     fig = plt.figure(figsize=np.array(RESOLUTION) / DPI)
-
+    
+    # set color
+    fig.set_facecolor('#E0E0E0')
+    fig.set_alpha(0.9)    
     # width_ratios effectively controls the colorbar width
     gs = GridSpec(2, 2, figure=fig, height_ratios=[2, 1], width_ratios=[40, 1])
 
@@ -262,12 +288,18 @@ def _spectrogram(
     cax = fig.add_subplot(gs[0, 1])
 
     wf_ax.plot(tr.times('matplotlib'), tr.data * rescale, 'k', linewidth=0.5)
+    spec_ax.set_facecolor('#a3c8d4')
+    cax.patch.set_facecolor('#E0E0E0')
+    wf_ax.patch.set_facecolor('#ababab')
+    wf_ax.patch.set_alpha(0.7)
+    [figure.set_linewidth(1.5) for figure in wf_ax.spines.values()]
+    spec_ax.set_alpha(0.8)
     wf_ax.set_ylabel(ylab)
     wf_ax.grid(linestyle=':')
     max_value = np.abs(tr.copy().trim(starttime, endtime).data).max() * rescale
     wf_ax.set_ylim(-max_value, max_value)
 
-    im = spec_ax.pcolormesh(t_mpl, f, sxx_db, cmap=cc.m_rainbow, rasterized=True)
+    im = spec_ax.pcolormesh(t_mpl, f, sxx_db, cmap=cc.m_rainbow4, rasterized=True, shading='auto')
 
     spec_ax.set_ylabel('Frequency (Hz)')
     spec_ax.grid(linestyle=':')
@@ -293,8 +325,10 @@ def _spectrogram(
         borderpad=0,
         prop=dict(color='red'),
     )
-    spec_ax.add_artist(time_box)
 
+    #fig.patch.set_facecolor(cl)
+    #fig.patch.set_alpha(0.5)
+    
     # Clip image to db_lim if provided (doesn't clip if db_lim=None)
     db_min, db_max = im.get_clim()
     im.set_clim(db_lim)
@@ -317,7 +351,7 @@ def _spectrogram(
         extend = 'neither'
 
     fig.colorbar(im, cax, extend=extend, extendfrac=EXTENDFRAC, label=clab)
-
+     
     spec_ax.set_title(
         '.'.join(
             [tr.stats.network, tr.stats.station, tr.stats.location, tr.stats.channel]
@@ -346,7 +380,21 @@ def _spectrogram(
     else:
         pass
     cax.set_position([pos.xmin, ymin, pos.width, height])
-
+    
+    if specOpts == "saveFile":
+      from matplotlib.artist import Artist 
+      outFile=str(fileName)
+      
+      try:
+       Artist.remove(time_box)
+      except:
+       pass
+       
+      fig.savefig(outFile + '.png',  dpi=200)
+      
+    if timeBox == True:
+      spec_ax.add_artist(time_box)
+    
     return fig, spec_line, wf_line, time_box
 
 
