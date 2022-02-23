@@ -3,6 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
+  - colorcet
   - ffmpeg
   - numpy<1.22  # TEMPORARY
   - obspy
