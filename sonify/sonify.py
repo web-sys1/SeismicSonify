@@ -1,48 +1,4 @@
-#!/usr/bin/env python3
-
-import os
-import subprocess
-import warnings
-
-import colorcet as cc
-import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
-import numpy as np
-import matplotlib.animation as anim
-from matplotlib.animation import FuncAnimation
-from matplotlib.gridspec import GridSpec
-from matplotlib.offsetbox import AnchoredText
-from obspy.clients.fdsn import Client
-from scipy import signal
-
-plt.ioff()
-
-cl = 'grey'
-
-anim.writers['ffmpeg']
-
-LOWEST_AUDIBLE_FREQUENCY = 20  # [Hz]
-HIGHEST_AUDIBLE_FREQUENCY = 20000  # [Hz]
-
-AUDIO_SAMPLE_RATE = 44100  # [Hz]
-
-TAPER = 0.01
-
-RESOLUTION = (3840, 2160)  # [px] Output video resolution (width, height)
-DPI = 500
-
-# For spectrograms
-REFERENCE_PRESSURE = 20e-6  # [Pa]
-REFERENCE_VELOCITY = 1  # [m/s]
-
-MS_PER_S = 1000  # [ms/s]
-
-# Colorbar extension triangle height as proportion of colorbar length
-EXTENDFRAC = 0.05
-
-
-def sonify(
-    fdsn,#!/usr/bin/env python
+#!/usr/bin/env python
 
 import argparse
 import subprocess
