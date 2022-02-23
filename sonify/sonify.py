@@ -14,7 +14,6 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.offsetbox import AnchoredText
 from obspy.clients.fdsn import Client
 from scipy import signal
-import mpld3
 
 plt.ioff()
 
