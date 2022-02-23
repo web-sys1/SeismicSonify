@@ -1,7 +1,7 @@
-import os
 import sys
+from pathlib import Path
 
-sys.path.insert(0, os.path.abspath('../sonify'))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 project = 'sonify'
 
@@ -25,11 +25,11 @@ napoleon_numpy_docstring = False
 
 master_doc = 'index'
 
-autodoc_mock_imports = ['colorcet', 'matplotlib', 'numpy', 'obspy', 'scipy']
+autodoc_mock_imports = ['matplotlib', 'numpy', 'obspy', 'scipy']
 
 intersphinx_mapping = {
-    'python': ('https://docs.python.org/3/', None),
     'obspy': ('https://docs.obspy.org/', None),
+    'python': ('https://docs.python.org/3/', None),
 }
 
 html_theme_options = {'prev_next_buttons_location': None}
