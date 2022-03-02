@@ -145,19 +145,10 @@ def seisPlotter(
     if not freqmin:
         freqmin = LOWEST_AUDIBLE_FREQUENCY / speed_up_factor
 
-    tr.remove_response()  # Units are m/s OR Pa after response removal
+    tr.remove_response(output="VEL")  # Units are m/s OR Pa after response removal
     tr.detrend('demean')
     
-    paz_sts2 = {
-      'poles': [-0.037004 + 0.037016j, -0.037004 - 0.037016j, -251.33 + 0j,
-              - 131.04 - 467.29j, -131.04 + 467.29j],
-      'zeros': [0j, 0j],
-      'gain': 60077000.0,
-      'sensitivity': 2516778400.0}
-    paz_1hz = corn_freq_2_paz(1.0, damp=0.707)  # 1Hz instrument
-    paz_1hz['sensitivity'] = 1.0
-    
-    tr.simulate(paz_remove=paz_sts2, paz_simulate=paz_1hz)
+
     
     print(f'Applying {freqmin}-{freqmax} Hz bandpass')
     
