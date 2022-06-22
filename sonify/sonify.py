@@ -7,16 +7,15 @@ import warnings
 from pathlib import Path
 from types import MethodType
 
-import colorcet as cc
 import matplotlib
 import matplotlib.dates as mdates
-import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import font_manager
 from matplotlib.animation import FuncAnimation
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.offsetbox import AnchoredText
+from matplotlib.ticker import ScalarFormatter
 from obspy import UTCDateTime
 from obspy.clients.fdsn import Client
 from scipy import signal
@@ -64,6 +63,10 @@ def sonify(
     starttime,
     endtime,
     location='*',
+    filter_type='bandpass',
+    h_freq=None,
+    l_freq=None,
+    wf_freq=None,
     freqmin=None,
     freqmax=None,
     TmB=None,
@@ -74,6 +77,8 @@ def sonify(
     output_dir=None,
     spec_win_dur=5,
     db_lim='smart',
+    unit_scale='auto',
+    num=None,
     log=False,
     specOpts='',
     utc_offset=None,
@@ -81,7 +86,6 @@ def sonify(
     r"""
     Produce an animated spectrogram with a soundtrack derived from sped-up
     seismic or infrasound data.
-
     Args:
         network (str): SEED network code
         station (str): SEED station code
@@ -111,7 +115,6 @@ def sonify(
         log (bool): If `True`, use log scaling for :math:`y`-axis of spectrogram
         utc_offset (int or float): If not `None`, convert UTC time to local time
             using this offset [hours] before plotting
-
     .. _Nyquist frequency: https://en.wikipedia.org/wiki/Nyquist_frequency
     """
 
@@ -200,12 +203,23 @@ def sonify(
     if TmB == None:
        raise IndexError('Timebox (TmB) bool is missing. Must be either True or False.')    
      
-    tr.remove_response()  # Units are m/s OR Pa after response removal
-    tr.detrend('demean')
-    tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
-    print(f'Applying {freqmin:g}-{freqmax:g} Hz bandpass')
-    tr.filter('bandpass', freqmin=freqmin, freqmax=freqmax, zerophase=True)
+    try:
+     tr.remove_response()  # Units are m/s OR Pa after response removal.
+     tr.detrend('demean')
+     tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
+    except Exception as error:
+     print(f'Error occured: {error}')
 
+    if filter_type == 'bandpass':
+     print(f'Applying {freqmin:g}-{freqmax:g} Hz bandpass, filtering waveform {wf_freq:g}.')
+     tr.filter('bandpass', freqmin=freqmin, freqmax=freqmax, zerophase=True)
+    elif filter_type == 'highpass':
+     print(f'Applying {h_freq:g} Hz highpass')
+     tr.filter('highpass', freq=h_freq, corners=2, zerophase=False)
+    elif filter_type == 'lowpass':
+     print(f'Applying {l_freq:g} Hz lowpass')
+     tr.filter('lowpass', freq=l_freq, corners=2, zerophase=True)
+     
     # Make trimmed version
     tr_trim = tr.copy()
     tr_trim.trim(starttime, endtime)
@@ -264,7 +278,12 @@ def sonify(
         rescale,
         spec_win_dur,
         db_lim,
+        unit_scale,
+        num,
+        wf_freq,
         (freqmin, freqmax),
+        filter_type,
+        (l_freq, h_freq),
         log,
         utc_offset is not None,
         resolution,
@@ -317,7 +336,12 @@ def _spectrogram(
     rescale,
     spec_win_dur,
     db_lim,
+    unit_scale,
+    num,
+    wf_freq,
     freq_lim,
+    filter_type,
+    lowhig_freqs,
     log,
     is_local_time,
     resolution,
@@ -328,7 +352,6 @@ def _spectrogram(
     """
     Make a combination waveform and spectrogram plot for an infrasound or
     seismic signal.
-
     Args:
         tr (:class:`~obspy.core.trace.Trace`): Input data, usually starts
             before `starttime` and ends after `endtime` (this function expects
@@ -343,7 +366,6 @@ def _spectrogram(
         log (bool): See docstring for :func:`~sonify.sonify`
         is_local_time (bool): Passed to :class:`_UTCDateFormatter`
         resolution (str): See docstring for :func:`~sonify.sonify`
-
     Returns:
         Tuple of (`fig`, `spec_line`, `wf_line`, `time_box`, `wf_progress`)
     """
@@ -369,11 +391,11 @@ def _spectrogram(
     nfft = np.power(2, int(np.ceil(np.log2(nperseg))) + 1)  # Pad fft with zeroes
 
     f, t, sxx = signal.spectrogram(
-        tr.data, fs, window='hann', nperseg=nperseg, noverlap=nperseg // 2, nfft=nfft
+        tr.data, fs, nperseg=nperseg, noverlap=nperseg // 2, window='hann', scaling='spectrum', nfft=nfft
     )
 
     # [dB rel. (ref_val <ref_val_unit>)^2 Hz^-1]
-    sxx_db = 10 * np.log10(sxx / (ref_val ** 2))
+    sxx_db = 10 * np.log10(sxx / (ref_val**2))
 
     t_mpl = tr.stats.starttime.matplotlib_date + (t / mdates.SEC_PER_DAY)
 
@@ -389,8 +411,18 @@ def _spectrogram(
     wf_ax = fig.add_subplot(gs[1, 0], sharex=spec_ax)  # Share x-axis with spec
     cax = fig.add_subplot(gs[0, 1])
 
+    wf_t = tr.copy()
+
+    if filter_type == 'bandpass':
+      wf_t.filter('bandpass', freqmin=wf_freq, freqmax=freq_lim[1], zerophase=True)
+    elif filter_type == 'lowpass':
+      wf_t.filter('lowpass', freq=lowhig_freqs[0], corners=2, zerophase=True)
+    elif filter_type == 'highpass':
+      wf_t.filter('highpass', freq=lowhig_freqs[1], corners=2, zerophase=True)
+
+
     wf_lw = 0.5
-    wf_ax.plot(tr.times('matplotlib'), tr.data * rescale, '#B0B0B0', linewidth=wf_lw)
+    wf_ax.plot(wf_t.times('matplotlib'), wf_t.data * rescale, 'r', linewidth=wf_lw)
     spec_ax.set_facecolor('#a3c8d4')
     cax.patch.set_facecolor('#f5f5f5')
     wf_ax.patch.set_facecolor('#c0c2fc')
@@ -399,11 +431,19 @@ def _spectrogram(
     spec_ax.set_alpha(0.2)
     wf_ax.set_ylabel(ylab)
     wf_ax.grid(linestyle=':')
-    max_value = np.abs(tr.copy().trim(starttime, endtime).data).max() * rescale
+    max_value = np.abs(wf_t.copy().trim(starttime, endtime).data).max() * rescale
     wf_ax.set_ylim(-max_value, max_value)
 
+    if unit_scale == 'auto':
+      print("Max value count: ", max_value)
+      wf_ax.set_ylim(-max_value, max_value)
+    elif unit_scale == 'other':
+      print('Num. count ', num)
+      wf_ax.set_ylim(-num, num)
+    
+
     im = spec_ax.pcolormesh(
-        t_mpl, f, sxx_db, cmap=cc.m_rainbow, shading='nearest', rasterized=True
+        t_mpl, f, sxx_db, cmap='jet', shading='nearest', rasterized=True
     )
 
     spec_ax.set_ylabel('Frequency (Hz)')
@@ -532,13 +572,11 @@ def _ffmpeg_combine(audio_file, video_file, output_file, call_str):
     """
     Combine audio and video files into a single movie. Uses a system call to
     `FFmpeg`_.
-
     Args:
         audio_file (:class:`~pathlib.Path`): Audio file to use
         video_file (:class:`~pathlib.Path`): Video file to use
         output_file (:class:`~pathlib.Path`): Output file (full path)
         call_str (str): Formatted record of sonify call to add to metadata
-
     .. _FFmpeg: https://www.ffmpeg.org/
     """
 
