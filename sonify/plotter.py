@@ -2,6 +2,7 @@
 
 import argparse
 import subprocess
+import sys
 import tempfile
 import warnings
 from pathlib import Path
@@ -215,6 +216,8 @@ def seisPlotter(
 
     if remove_response==1:
        tr.remove_response()  # Units are m/s OR Pa after response removal.
+       tr.detrend('demean')
+       tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
     elif remove_response==2: # These output types are 'ACC', 'DEF', 'DISP', or 'VEL'.
      if output_disposal=='ACC' in output_units:
        tr.remove_response(output='ACC', pre_filt=pre_filt)
@@ -233,11 +236,8 @@ def seisPlotter(
        print("Skipping response removal...")
        
     else: 
-       print("Parameter 'remove_response' (int) doesn't have exact value. Skipping...")
-
-    tr.detrend('demean')
-    tr.detrend('linear')
-    tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
+       print("Parameter 'remove_response' doesn't have exact value. Skipping process...")
+       sys.exit(-1)
 
     if filter_type == 'bandpass':
      print(f'Applying {freqmin:g}-{freqmax:g} Hz bandpass, filtering waveform {wf_freq:g}.')

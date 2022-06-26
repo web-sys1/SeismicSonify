@@ -2,6 +2,7 @@
 
 import argparse
 import subprocess
+import sys
 import tempfile
 import warnings
 from pathlib import Path
@@ -63,6 +64,9 @@ def sonify(
     starttime,
     endtime,
     location='*',
+    remove_response=None,
+    output_disposal=None,
+    pre_filt=None,
     filter_type='bandpass',
     h_freq=None,
     l_freq=None,
@@ -202,13 +206,35 @@ def sonify(
         
     if TmB == None:
        raise IndexError('Timebox (TmB) bool is missing. Must be either True or False.')    
-     
-    try:
-     tr.remove_response()  # Units are m/s OR Pa after response removal.
-     tr.detrend('demean')
-     tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
-    except Exception as error:
-     print(f'Error occured: {error}')
+
+    # If you do not specify 'remove_response', then: set the parameter to 0 (int zero) to skip removal.
+    
+    output_units = ['ACC', 'DEF', 'DISP', 'VEL']
+
+    if remove_response==1:
+       tr.remove_response()  # Units are m/s OR Pa after response removal.
+       tr.detrend('demean')
+       tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
+    elif remove_response==2: # These output types are 'ACC', 'DEF', 'DISP', or 'VEL'.
+     if output_disposal=='ACC' in output_units:
+       tr.remove_response(output='ACC', pre_filt=pre_filt)
+     elif output_disposal=='DEF' in output_units:
+       tr.remove_response(output='DEF', pre_filt=pre_filt)       
+     elif output_disposal=='DISP' in output_units:
+       tr.remove_response(output='DISP', pre_filt=pre_filt)
+     elif output_disposal=='VEL' in output_units:
+       tr.remove_response(output='VEL', pre_filt=pre_filt)
+     elif output_disposal is None:
+       raise Exception("Parameter 'output_disposal' required. Please specify: 'ACC', 'DEF', 'DISP', or 'VEL'")
+     elif output_disposal not in output_units:
+       raise ValueError("'{0}' not a exact value".format(output_units))
+       
+    elif remove_response==0: 
+       print("Skipping response removal...")
+       
+    else: 
+       print("Parameter 'remove_response' (int) doesn't have exact value. Skipping process...")
+       sys.exit(-1)
 
     if filter_type == 'bandpass':
      print(f'Applying {freqmin:g}-{freqmax:g} Hz bandpass, filtering waveform {wf_freq:g}.')
