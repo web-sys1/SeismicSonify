@@ -77,6 +77,7 @@ def sonify(
     base_url=False,
     speed_up_factor=200,
     fps=1,
+    rescale=1e6,
     resolution='4K',
     output_dir=None,
     spec_win_dur=5,
@@ -190,7 +191,7 @@ def sonify(
     # All high-gain seismometers have a "?H?" channel pattern
     elif tr.stats.channel[1] == 'H':
         is_infrasound = False
-        rescale = 1e6  # Convert m to µm
+        rescale = rescale  # Convert m to µm
     # We can't figure out what type of sensor this is...
     else:
         raise ValueError(
@@ -219,7 +220,7 @@ def sonify(
      if output_disposal=='ACC' in output_units:
        tr.remove_response(output='ACC', pre_filt=pre_filt)
      elif output_disposal=='DEF' in output_units:
-       tr.remove_response(output='DEF', pre_filt=pre_filt)       
+       tr.remove_response(output='DEF', pre_filt=pre_filt)
      elif output_disposal=='DISP' in output_units:
        tr.remove_response(output='DISP', pre_filt=pre_filt)
      elif output_disposal=='VEL' in output_units:

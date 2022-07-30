@@ -13,19 +13,21 @@ import matplotlib
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib import font_manager
+import obspy
+
+from matplotlib import font_manager, mlab
 from matplotlib.animation import FuncAnimation
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.offsetbox import AnchoredText
 from matplotlib.ticker import ScalarFormatter
+from obspy.signal.util import next_pow_2
 from obspy import UTCDateTime
 from obspy.clients.fdsn import Client
 from scipy import signal
 
 from . import __version__
-
-remove_resp = None
+    
 
 # Add Tex Gyre Heros to Matplotlib
 for font_path in font_manager.findSystemFonts(
@@ -58,37 +60,42 @@ REFERENCE_VELOCITY = 1  # [m/s]
 MS_PER_S = 1000  # [ms/s]
 
 # Colorbar extension triangle height as proportion of colorbar length
-EXTENDFRAC = 0.04
+EXTENDFRAC = 0.0000
 
 def seisPlotter(
-    FDSN_service,
-    network,
-    station,
-    channel,
-    starttime,
-    endtime,
+    type='local',
+    file='',
+    fdsn_client='IRIS',
+    network='',
+    station='',
     location='*',
+    channel='',
+    starttime=None,
+    endtime=None,
     remove_response=None,
     output_disposal=None,
     pre_filt=None,
     filter_type='bandpass',
-    h_freq=None,
+    h_freq=0.98,
     l_freq=None,
     wf_freq=None,
     freqmin=None,
     freqmax=None,
-    TmB=None,
     base_url=False,
     speed_up_factor=200,
     fps=1,
+    rescale=1e6,
     resolution='4K',
     output_dir=None,
     spec_win_dur=5,
     db_lim='smart',
-    unit_scale='auto',
+    scaling='auto',
+    spectral_scaling='density',
+    cmap='inferno',
+    toggle_waveform=True,
     num=None,
     log=False,
-    specOpts='',
+    specOpts=None,
     utc_offset=None,
 ):
     r"""
@@ -125,11 +132,10 @@ def seisPlotter(
             using this offset [hours] before plotting
     .. _Nyquist frequency: https://en.wikipedia.org/wiki/Nyquist_frequency
     """
-
     # Capture args and format as string to store in movie metadata
-    key_value_pairs = [f'{k}={repr(v)}' for k, v in locals().items()]
-    call_str = 'sonify({})'.format(', '.join(key_value_pairs))
-
+    #key_value_pairs = [f'{k}={repr(v)}' for k, v in locals().items()]
+    #call_str = 'sonify({})'.format(', '.join(key_value_pairs))
+    
     # Use current working directory if none provided
     if not output_dir:
         output_dir = Path().cwd()
@@ -137,17 +143,10 @@ def seisPlotter(
     if not output_dir.exists():
         raise FileNotFoundError(f'Directory {output_dir} does not exist!')
     
-    fdsn_client = str(FDSN_service)
-    
-    if base_url == True:
-      client = Client(base_url=fdsn_client)
-    elif not base_url:
-      client = Client(fdsn_client)
-
-    #client = Client('IRIS')
-
-    print('Retrieving data...')
-    st = client.get_waveforms(
+    if type=='FDSN':
+     print('Retrieving data...')
+     client = Client(fdsn_client)
+     st = client.get_waveforms(
         network,
         station,
         location,
@@ -155,7 +154,10 @@ def seisPlotter(
         starttime - PAD,
         endtime + PAD,
         attach_response=True,
-    )
+      )
+    elif type=='local':
+     st = obspy.read(file)
+
     print('Done')
 
     # Merge Traces with the same IDs
@@ -194,7 +196,7 @@ def seisPlotter(
     # All high-gain seismometers have a "?H?" channel pattern
     elif tr.stats.channel[1] == 'H':
         is_infrasound = False
-        rescale = 1e6 #e-3 # Convert m to lower (can be *µm per second)
+        rescale = rescale # Convert m to lower (can be *µm per second)
     # We can't figure out what type of sensor this is...
     else:
         raise ValueError(
@@ -207,15 +209,12 @@ def seisPlotter(
         )
     if not freqmin:
         freqmin = LOWEST_AUDIBLE_FREQUENCY / speed_up_factor
-        
-    if TmB == None:
-       raise IndexError('Timebox (TmB) bool is missing. Must be either True or False.')
     
     # If you do not specify 'remove_response', then: set the parameter to 0 (int zero) to skip removal.
     output_units = ['ACC', 'DEF', 'DISP', 'VEL']
 
     if remove_response==1:
-       tr.remove_response()  # Units are m/s OR Pa after response removal.
+       tr.remove_response()  # Units are m/s OR Pa after response removal.  By default, when remove_response set to 1, then result is equivalent to what the scale is.
        tr.detrend('demean')
        tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
     elif remove_response==2: # These output types are 'ACC', 'DEF', 'DISP', or 'VEL'.
@@ -240,8 +239,9 @@ def seisPlotter(
        sys.exit(-1)
 
     if filter_type == 'bandpass':
+     tr.detrend("linear")
      print(f'Applying {freqmin:g}-{freqmax:g} Hz bandpass, filtering waveform {wf_freq:g}.')
-     tr.filter('bandpass', freqmin=freqmin, freqmax=freqmax, zerophase=True)
+     tr.filter('bandpass', freqmin=freqmin, freqmax=freqmax, corners=2, zerophase=True)
     elif filter_type == 'highpass':
      print(f'Applying {h_freq:g} Hz highpass')
      tr.filter('highpass', freq=h_freq, corners=2, zerophase=False)
@@ -256,50 +256,18 @@ def seisPlotter(
     # Create temporary directory for audio and video files
     #temp_dir = tempfile.TemporaryDirectory()
 
-    # MAKE AUDIO FILE
-    """
-    tr_audio = tr_trim.copy()
-    target_fs = AUDIO_SAMPLE_RATE / speed_up_factor
-    corner_freq = 0.4 * target_fs  # [Hz] Note that Nyquist is 0.5 * target_fs
-    if corner_freq < tr_audio.stats.sampling_rate / 2:  # To avoid ValueError
-        tr_audio.filter('lowpass', freq=corner_freq, corners=10, zerophase=True)
-    tr_audio.interpolate(sampling_rate=target_fs, method='lanczos', a=20)
-    tr_audio.taper(0.01)  # For smooth start and end
-    audio_file = Path(temp_dir.name) / '47.wav'
-    print('Saving audio file...')
-    tr_audio.write(
-        str(audio_file),
-        format='WAV',
-        width=4,
-        rescale=True,
-        framerate=AUDIO_SAMPLE_RATE,
-    )
-    print('Done')
-    """
-    # MAKE VIDEO FILE
-
     # We don't need an anti-aliasing filter here since we never use the values,
     # just the timestamps
     timing_tr = tr_trim.copy().interpolate(sampling_rate=fps / speed_up_factor)
     times = timing_tr.times('UTCDateTime')[:-1]  # Remove extra frame
-    """
-    # Define update function
-    def _march_forward(frame, spec_line, wf_line, time_box, wf_progress):
 
-        spec_line.set_xdata(times[frame].matplotlib_date)
-        wf_line.set_xdata(times[frame].matplotlib_date)
-        time_box.txt.set_text(times[frame].strftime('%H:%M:%S'))
-        tr_progress = tr.copy().trim(endtime=times[frame])
-        wf_progress.set_xdata(tr_progress.times('matplotlib'))
-        wf_progress.set_ydata(tr_progress.data * rescale)
-    """
     # Store user's rc settings, then update font stuff
     original_params = matplotlib.rcParams.copy()
     matplotlib.rcParams.update(matplotlib.rcParamsDefault)
     matplotlib.rcParams['font.sans-serif'] = 'Tex Gyre Heros'
     matplotlib.rcParams['mathtext.fontset'] = 'custom'
 
-    fig, *fargs = _spectrogram(
+    fig, tr_w, wf_ax, *fargs = _spectrogram(
         tr,
         starttime,
         endtime,
@@ -307,8 +275,10 @@ def seisPlotter(
         rescale,
         spec_win_dur,
         db_lim,
-        unit_scale,
+        scaling,
         num,
+        spectral_scaling,
+        cmap,
         wf_freq,
         (freqmin, freqmax),
         filter_type,
@@ -316,48 +286,14 @@ def seisPlotter(
         log,
         utc_offset is not None,
         resolution,
-        timeBox=TmB,
         specOpts=specOpts,
-        fileName=tr.id
+        fileName=tr.id,
+        toggle_waveform=toggle_waveform,
     )
     
-    """
-    # Create animation
-    interval = ((1 / timing_tr.stats.sampling_rate) * MS_PER_S) / speed_up_factor
-    animation = FuncAnimation(
-        fig,
-        func=_march_forward,
-        frames=times.size,
-        fargs=fargs,
-        interval=interval,
-    )
-  
-    video_file = Path(temp_dir.name) / '47.mp4'
-    print('Saving animation. This may take a while...')
-    animation.save(
-        video_file,
-        dpi=RESOLUTIONS[resolution][0] / FIGURE_WIDTH,  # Can be a float...
-        progress_callback=lambda i, n: print(
-            '{:.1f}%'.format(((i + 1) / n) * 100), end='\r'
-        ),
-    )
-    print('\nDone')
-    """
-    
-    # Restore user's rc settings, ignoring Matplotlib deprecation warnings
-    """
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore')
-        matplotlib.rcParams.update(original_params)
-    """
-    # MAKE COMBINED FILE
-    """
-    tr_id_str = '_'.join([code for code in tr.id.split('.') if code])
-    output_file = output_dir / f'{tr_id_str}_{speed_up_factor}x.mp4'
-    _ffmpeg_combine(audio_file, video_file, output_file, call_str)
-    """
     # Clean up temporary directory, just to be safe
     #temp_dir.cleanup()
+    return fig, tr, offset, plt, starttime, endtime
 
 
 def _spectrogram(
@@ -368,8 +304,10 @@ def _spectrogram(
     rescale,
     spec_win_dur,
     db_lim,
-    unit_scale,
+    scaling,
     num,
+    spectral_scaling,
+    colormap,
     wf_freq,
     freq_lim,
     filter_type,
@@ -377,10 +315,11 @@ def _spectrogram(
     log,
     is_local_time,
     resolution,
-    timeBox=False,
     specOpts='',
     fileName='',
-):
+    toggle_waveform=True,
+    ):
+    
     """
     Make a combination waveform and spectrogram plot for an infrasound or
     seismic signal.
@@ -394,7 +333,14 @@ def _spectrogram(
         rescale (int or float): Scale waveforms by this factor for plotting
         spec_win_dur (int or float): See docstring for :func:`~sonify.sonify`
         db_lim (tuple or str): See docstring for :func:`~sonify.sonify`
+        wf_freq (int or float): Filter waveform frequencies
+            (followed by filter_type="bandpass")
         freq_lim (tuple): Tuple defining frequency limits for spectrogram plot
+        filter_type (str): Choose what waveform data you want to filter out
+             (can be 'bandpass', 'lowpass' or 'highpass')
+        lowhig_freqs (tuple): Lowpass or highpass. Tuple argument to adjust the 
+              frequency differences resulted from retrieving data
+              from the server in MSEED
         log (bool): See docstring for :func:`~sonify.sonify`
         is_local_time (bool): Passed to :class:`_UTCDateFormatter`
         resolution (str): See docstring for :func:`~sonify.sonify`
@@ -417,29 +363,41 @@ def _spectrogram(
                 f'Power (dB rel. [{REFERENCE_VELOCITY:g} m s$^{{-1}}$]$^2$ Hz$^{{-1}}$)'
             )
         ref_val = REFERENCE_VELOCITY
-
+        
+    
+    #print('Spectral scaling:', spectral_scaling)
+    
     fs = tr.stats.sampling_rate
     nperseg = int(spec_win_dur * fs)  # Samples
     nfft = np.power(2, int(np.ceil(np.log2(nperseg))) + 1)  # Pad fft with zeroes
 
+    #print('Sample buffering: {} .. {} per {} (fs)'.format(nperseg, nfft, fs))
+
+
     f, t, sxx = signal.spectrogram(
-        tr.data, fs, nperseg=nperseg, noverlap=nperseg // 2, scaling='spectrum', nfft=nfft
+        tr.data, fs, nperseg=nperseg, window='hann', noverlap=nperseg // 2, scaling=spectral_scaling, nfft=nfft
     )
+
+    """
+    plt.psd(tr.data, NFFT=nfft, Fs=fs,
+            pad_to = 512,
+            noverlap=nperseg // 2,
+            scale_by_freq = True)
+    """
 
     # [dB rel. (ref_val <ref_val_unit>)^2 Hz^-1]
     sxx_db = 10 * np.log10(sxx / (ref_val**2))
 
     t_mpl = tr.stats.starttime.matplotlib_date + (t / mdates.SEC_PER_DAY)
-
+    
     # Ensure a 16:9 aspect ratio
     FIGURE_WIDTH = 7.7
     fig = plt.figure(figsize=(FIGURE_WIDTH, (9 / 16) * FIGURE_WIDTH))
     # set color
-    fig.patch.set_facecolor('#f5f5f5')
-    fig.patch.set_alpha(0.2) 
+    fig.set_facecolor('#fcfcfc')
     # width_ratios effectively controls the colorbar width
-    gs = GridSpec(2, 2, figure=fig, height_ratios=[2, 1], width_ratios=[40, 1])
-
+    gs = GridSpec(2, 2, figure=fig, height_ratios=[4, 1], width_ratios=[40, 1])
+    
     spec_ax = fig.add_subplot(gs[0, 0])
     wf_ax = fig.add_subplot(gs[1, 0], sharex=spec_ax)  # Share x-axis with spec
     cax = fig.add_subplot(gs[0, 1])
@@ -447,11 +405,14 @@ def _spectrogram(
     wf_t = tr.copy()
     
     if filter_type == 'bandpass':
-      wf_t.filter('bandpass', freqmin=wf_freq, freqmax=freq_lim[1], zerophase=True)
+      wf_t.detrend("linear")
+      wf_t.filter('bandpass', freqmin=wf_freq, freqmax=freq_lim[1], corners=2, zerophase=True)
     elif filter_type == 'lowpass':
-      wf_t.filter('lowpass', freq=lowhig_freqs[0], corners=2, zerophase=True)
+      wf_t.filter('lowpass', freq=lowhig_freqs[0], corners=2, zerophase=False)
     elif filter_type == 'highpass':
-      wf_t.filter('highpass', freq=lowhig_freqs[1], corners=2, zerophase=False)
+      wf_t.filter('highpass', freq=lowhig_freqs[1], corners=2, zerophase=True)
+    else:
+      raise TypeError('Invalid frequency output')
 
     
     wf_lw = 0.5
@@ -466,15 +427,15 @@ def _spectrogram(
     wf_ax.grid(linestyle=':')
     max_value = np.abs(wf_t.copy().trim(starttime, endtime).data).max() * rescale
     
-    if unit_scale == 'auto':
+    if scaling == 'auto':
       print("Max value: ", max_value)
       wf_ax.set_ylim(-max_value, max_value)
-    elif unit_scale == 'other':
-      print('Num. count ', num)
+    elif scaling == 'other':
+      print('Num. count:', num)
       wf_ax.set_ylim(-num, num)
     
     im = spec_ax.pcolormesh(
-        t_mpl, f, sxx_db, cmap='jet', shading='nearest', rasterized=True
+        t_mpl, f, sxx_db, cmap=colormap, shading='nearest', rasterized=True
     )
 
     spec_ax.set_ylabel('Frequency (Hz)')
@@ -487,7 +448,7 @@ def _spectrogram(
     locator = mdates.AutoDateLocator()
     wf_ax.xaxis.set_major_locator(locator)
     wf_ax.xaxis.set_major_formatter(_UTCDateFormatter(locator, is_local_time))
-    fig.autofmt_xdate()
+    #fig.autofmt_xdate()
 
     # "Crop" x-axis!
     wf_ax.set_xlim(starttime.matplotlib_date, endtime.matplotlib_date)
@@ -495,7 +456,7 @@ def _spectrogram(
     # Initialize animated stuff
     line_kwargs = dict(x=starttime.matplotlib_date, color='forestgreen', linewidth=1)
     spec_line = spec_ax.axvline(**line_kwargs)
-    wf_line = wf_ax.axvline(**line_kwargs) #ymin=0.01, clip_on=False, zorder=10,
+    wf_line = wf_ax.axvline(**line_kwargs) #ymin=0.01, clip_on=False, zorder=10
     time_box = AnchoredText(
         s=starttime.strftime('%H:%M:%S'),
         pad=0.2,
@@ -515,11 +476,11 @@ def _spectrogram(
     # 9 is below marker; 11 is above marker
     
     spec_ax.spines['bottom'].set_zorder(9)
-    """
+    
     wf_ax.spines['top'].set_zorder(9)
     for side in 'bottom', 'left', 'right':
         wf_ax.spines[side].set_zorder(11)
-    """
+    
     # Pick smart limits rounded to nearest 10
     if db_lim == 'smart':
         db_min = np.percentile(sxx_db, 20)
@@ -546,13 +507,25 @@ def _spectrogram(
     else:
         extend = 'neither'
 
-    fig.colorbar(im, cax, extend=extend, extendfrac=EXTENDFRAC, label=clab)
+    plt.colorbar(im, cax, extend=extend, extendfrac=EXTENDFRAC, ax=fig.get_axes(), label=clab)
 
-    spec_ax.set_title(tr.id)
+    spec_ax.set_title(f'{tr.id} - {tr.stats.endtime}')
 
     fig.tight_layout()
     fig.subplots_adjust(hspace=0, wspace=0.05)
-
+    
+    
+    if toggle_waveform == False:
+     spec_ax.xaxis.set_major_locator(locator)
+     spec_ax.xaxis.set_major_formatter(_UTCDateFormatter(locator, is_local_time))
+     plt.setp(spec_ax.xaxis.get_majorticklabels(), rotation = 45)
+     fig.delaxes(wf_ax)
+    elif toggle_waveform == True:
+     fig.autofmt_xdate()
+     plt.setp(spec_ax.get_xticklabels(), visible=False)
+     spec_ax.tick_params(axis='x', which='both', length=0, labelbottom=False)
+    
+    
     # Finnicky formatting to get extension triangles (if they exist) to extend
     # above and below the vertical extent of the spectrogram axes
     pos = cax.get_position()
@@ -586,73 +559,45 @@ def _spectrogram(
             ha='left',
             va='top',
         )
-
+        
     if specOpts == "saveAsPngFile":
      from matplotlib.artist import Artist 
      outFile=str(fileName)
      try:
        Artist.remove(time_box)
      except:
-       pass 
-     fig.savefig(outFile + '.png',  dpi=200)
-    elif specOpts == "modePreview":
-     plt.ion()
+       pass
+     fig.savefig(outFile + '.png', format='png', dpi=RESOLUTIONS[resolution][0] / FIGURE_WIDTH)
+     print('Fig. size:', plt.gcf().get_size_inches())
+     print('DPI:', fig.get_dpi())
+     print('File Saved as PNG')
+    elif specOpts == "saveAsPDF":
+     from matplotlib.artist import Artist 
+     outFile=str(fileName)
+     fig.savefig(outFile + '.pdf', format='pdf', dpi=RESOLUTIONS[resolution][0] / FIGURE_WIDTH)
+     print('File Saved as PDF') 
+    elif specOpts == "interactive":
+     #plt.ion()
+     fig.set_size_inches(12, 8)
+     print('Fig. size:', plt.gcf().get_size_inches())
+     print('DPI', fig.get_dpi())
      plt.show(block=True)
-     
-    if timeBox == True:
-      spec_ax.add_artist(time_box)
-    
-    return fig, spec_line, wf_line, time_box, wf_progress
-
-
-def _ffmpeg_combine(audio_file, video_file, output_file, call_str):
-    """
-    Combine audio and video files into a single movie. Uses a system call to
-    `FFmpeg`_.
-    Args:
-        audio_file (:class:`~pathlib.Path`): Audio file to use
-        video_file (:class:`~pathlib.Path`): Video file to use
-        output_file (:class:`~pathlib.Path`): Output file (full path)
-        call_str (str): Formatted record of sonify call to add to metadata
-    .. _FFmpeg: https://www.ffmpeg.org/
-    """
-
-    args = [
-        'ffmpeg',
-        '-y',
-        '-v',
-        'warning',
-        '-i',
-        video_file,
-        '-guess_layout_max',
-        '0',
-        '-i',
-        audio_file,
-        '-c:v',
-        'copy',
-        '-c:a',
-        'aac',
-        '-b:a',
-        '320k',
-        '-ac',
-        '2',
-        '-metadata',
-        f'artist=sonify, rev. {__version__}',
-        '-metadata',
-        f'comment={call_str}',
-        output_file,
-    ]
-    print('Combining video and audio using ffmpeg...')
-    code = subprocess.call(args)
-
-    if code == 0:
-        print(f'Video saved as {output_file}')
+    elif specOpts is None:
+     pass
     else:
-        output_file.unlink(missing_ok=True)  # Remove file if it was made
-        raise OSError(
-            'Issue with ffmpeg conversion. Check error messages and try again.'
-        )
+     raise ValueError('specOpts argument has unexpected non-valid choice. Cannot proceed.')
+     
+    return fig, tr, wf_ax, spec_line, wf_line, time_box, wf_progress
 
+def maximize():
+    plot_backend = plt.get_backend()
+    mng = plt.get_current_fig_manager()
+    if plot_backend == 'TkAgg':
+        mng.resize(*mng.window.maxsize())
+    elif plot_backend == 'wxAgg':
+        mng.frame.Maximize(True)
+    elif plot_backend == 'Qt4Agg':
+        mng.window.showMaximized()
 
 # Subclass ConciseDateFormatter (modifies __init__() and set_axis() methods)
 class _UTCDateFormatter(mdates.ConciseDateFormatter):
