@@ -147,17 +147,15 @@ def seisPlotter(
      print('Retrieving data...')
      client = Client(fdsn_client)
      st = client.get_waveforms(
-        network,
-        station,
-        location,
-        channel,
-        starttime - PAD,
-        endtime + PAD,
-        attach_response=True,
-      )
+        network=network,
+        station=station,
+        location=location,
+        channel=channel,
+        starttime=starttime - PAD,
+        endtime=endtime + PAD,
+    )
     elif type=='local':
      st = obspy.read(file)
-
     print('Done')
 
     # Merge Traces with the same IDs
@@ -168,7 +166,18 @@ def seisPlotter(
         for tr in st:
             print(tr.id)
     tr = st[0]
-
+    
+    # Now that we have just one Trace, get inventory (which has response info)
+    inv = client.get_stations(
+        network=tr.stats.network,
+        station=tr.stats.station,
+        location=tr.stats.location,
+        channel=tr.stats.channel,
+        starttime=tr.stats.starttime,
+        endtime=tr.stats.endtime,
+        level='response',
+    )
+    
     # Adjust starttime so we have nice numbers in time box (carefully!)
     offset = np.abs(tr.stats.starttime - (starttime - PAD))  # [s]
     if offset > tr.stats.delta:
@@ -214,29 +223,27 @@ def seisPlotter(
     output_units = ['ACC', 'DEF', 'DISP', 'VEL']
 
     if remove_response==1:
-       tr.remove_response()  # Units are m/s OR Pa after response removal.  By default, when remove_response set to 1, then result is equivalent to what the scale is.
-       tr.detrend('demean')
-       tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
+     tr.remove_response(inventory=inv)  # Units are m/s OR Pa after response removal. By default, when remove_response set to 1, then result is equivalent to what the scale is.
+     tr.detrend('demean')
+     tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
     elif remove_response==2: # These output types are 'ACC', 'DEF', 'DISP', or 'VEL'.
      if output_disposal=='ACC' in output_units:
-       tr.remove_response(output='ACC', pre_filt=pre_filt)
+       tr.remove_response(inventory=inv, output='ACC', pre_filt=pre_filt)
      elif output_disposal=='DEF' in output_units:
-       tr.remove_response(output='DEF', pre_filt=pre_filt)       
+       tr.remove_response(inventory=inv, output='DEF', pre_filt=pre_filt)       
      elif output_disposal=='DISP' in output_units:
-       tr.remove_response(output='DISP', pre_filt=pre_filt)
+       tr.remove_response(inventory=inv, output='DISP', pre_filt=pre_filt)
      elif output_disposal=='VEL' in output_units:
-       tr.remove_response(output='VEL', pre_filt=pre_filt)
+       tr.remove_response(inventory=inv, output='VEL', pre_filt=pre_filt)
      elif output_disposal is None:
        raise Exception("Parameter 'output_disposal' required. Please specify: 'ACC', 'DEF', 'DISP', or 'VEL'")
      elif output_disposal not in output_units:
        raise ValueError("'{0}' not a exact value".format(output_units))
-       
     elif remove_response==0: 
-       print("Skipping response removal...")
-       
+     print("Skipping response removal...")
     else: 
-       print("Parameter 'remove_response' doesn't have exact value. Skipping process...")
-       sys.exit(-1)
+     print("Parameter 'remove_response' doesn't have exact value. Skipping process...")
+     sys.exit(-1)
 
     if filter_type == 'bandpass':
      tr.detrend("linear")
