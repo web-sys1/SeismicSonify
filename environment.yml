@@ -3,19 +3,10 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - colorcet
-  - matplotlib
-  - ffmpeg
-  - numpy<1.22  # TEMPORARY
+  - ffmpeg=4.3  # https://anaconda.org/conda-forge/ffmpeg
   - obspy
   - pip
   - setuptools<58.4.0  # https://github.com/pypa/setuptools/issues/2497
-# Lines above should be IDENTICAL to environment.yml
-  - black<22
-  - ipython
-  - isort
-  - pytest-cov
-  - pytest-mpl
+  - tqdm
   - pip:
-    - --requirement doc/requirements.txt
     - --editable .
