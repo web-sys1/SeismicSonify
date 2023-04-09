@@ -56,6 +56,7 @@ FIGURE_WIDTH = 7.7  # [in] Sets effective font size, basically
 # For spectrograms
 REFERENCE_PRESSURE = 20e-6  # [Pa]
 REFERENCE_VELOCITY = 1  # [m/s]
+REFERENCE_ACCELERATION = 9.806 # [m/s**2] Peak acceleration 
 
 MS_PER_S = 1000  # [ms/s]
 
@@ -145,7 +146,7 @@ def seisPlotter(
     
     if type=='FDSN':
      print('Retrieving data...')
-     client = Client(fdsn_client)
+     client = Client(fdsn_client, debug=True, timeout=300)
      st = client.get_waveforms(
         network=network,
         station=station,
@@ -201,11 +202,18 @@ def seisPlotter(
     # All infrasound sensors have a "?DF" channel pattern
     if tr.stats.channel[1:3] == 'DF':
         is_infrasound = True
+        acceleration = False
         rescale = 1  # No conversion
     # All high-gain seismometers have a "?H?" channel pattern
     elif tr.stats.channel[1] == 'H':
+        acceleration = None
         is_infrasound = False
         rescale = rescale # Convert m to lower (can be *µm per second)
+    # Include accelerometer functionality that have "?N?" channel pattern
+    elif tr.stats.channel[1] == 'N':
+        is_infrasound = None
+        acceleration = True
+        rescale = 1e2 # Convert m to cm/[s]**2 (per square)
     # We can't figure out what type of sensor this is...
     else:
         raise ValueError(
@@ -239,7 +247,7 @@ def seisPlotter(
        raise Exception("Parameter 'output_disposal' required. Please specify: 'ACC', 'DEF', 'DISP', or 'VEL'")
      elif output_disposal not in output_units:
        raise ValueError("'{0}' not a exact value".format(output_units))
-    elif remove_response==0: 
+    elif remove_response==0:
      print("Skipping response removal...")
     else: 
      print("Parameter 'remove_response' doesn't have exact value. Skipping process...")
@@ -255,13 +263,10 @@ def seisPlotter(
     elif filter_type == 'lowpass':
      print(f'Applying {l_freq:g} Hz lowpass')
      tr.filter('lowpass', freq=l_freq, corners=2, zerophase=True)
-
+         
     # Make trimmed version
     tr_trim = tr.copy()
     tr_trim.trim(starttime, endtime)
-
-    # Create temporary directory for audio and video files
-    #temp_dir = tempfile.TemporaryDirectory()
 
     # We don't need an anti-aliasing filter here since we never use the values,
     # just the timestamps
@@ -279,6 +284,7 @@ def seisPlotter(
         starttime,
         endtime,
         is_infrasound,
+        acceleration,
         rescale,
         spec_win_dur,
         db_lim,
@@ -294,13 +300,13 @@ def seisPlotter(
         utc_offset is not None,
         resolution,
         specOpts=specOpts,
-        fileName=tr.id,
+        fileName=f"{tr.id}_spec+{int(float(endtime.timestamp) * 1000)}",
         toggle_waveform=toggle_waveform,
     )
     
     # Clean up temporary directory, just to be safe
     #temp_dir.cleanup()
-    return fig, tr, offset, plt, starttime, endtime
+    return fig, tr, offset, wf_ax, starttime, endtime
 
 
 def _spectrogram(
@@ -308,6 +314,7 @@ def _spectrogram(
     starttime,
     endtime,
     is_infrasound,
+    acceleration,
     rescale,
     spec_win_dur,
     db_lim,
@@ -359,8 +366,12 @@ def _spectrogram(
         ylab = 'Pressure (Pa)'
         clab = f'Power (dB rel. [{REFERENCE_PRESSURE * 1e6:g} µPa]$^2$ Hz$^{{-1}}$)'
         ref_val = REFERENCE_PRESSURE
+    elif acceleration and not is_infrasound:
+        ylab = 'Acceleration\n (m/s**2 | cm s$^{-2}$)'
+        clab = f'Power (dB rel. [{REFERENCE_ACCELERATION:g} m s$^{{-2}}$]$^2$ Hz$^{{-2}}$)'
+        ref_val = REFERENCE_ACCELERATION
     else:
-        ylab = 'Scale (µm s$^{-1}$)'
+        ylab = 'Velocity (µm s$^{-1}$)'
         if REFERENCE_VELOCITY == 1:
             clab = (
                 f'Power (dB rel. {REFERENCE_VELOCITY:g} [m s$^{{-1}}$]$^2$ Hz$^{{-1}}$)'
@@ -579,11 +590,12 @@ def _spectrogram(
      print('DPI:', fig.get_dpi())
      print('File Saved as PNG')
     elif specOpts == "saveAsPDF":
-     from matplotlib.artist import Artist 
+     from matplotlib.artist import Artist
+     spec_ax.set_rasterized(True)
      outFile=str(fileName)
-     fig.savefig(outFile + '.pdf', format='pdf', dpi=RESOLUTIONS[resolution][0] / FIGURE_WIDTH)
-     print('File Saved as PDF') 
-    elif specOpts == "interactive":
+     fig.savefig(outFile + '.pdf', format='pdf', dpi=RESOLUTIONS[resolution][0] / FIGURE_WIDTH, bbox_inches='tight')
+     print('File Saved as PDF.') 
+    elif specOpts == "interactive": # mode [Preview] : preview as interactive
      #plt.ion()
      fig.set_size_inches(12, 8)
      print('Fig. size:', plt.gcf().get_size_inches())

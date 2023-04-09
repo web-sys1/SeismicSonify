@@ -3,7 +3,7 @@ from obspy.core import read, Stream
 import numpy as np
 
 ## imports for mimicing obspy spectrograms
-from obspy.imaging.spectrogram import .
+from obspy.imaging.spectrogram import *
 from matplotlib import mlab
 import matplotlib.pyplot as plt
 
