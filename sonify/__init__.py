@@ -1,7 +1,8 @@
 import subprocess
 from pathlib import Path
 
-__version__ = subprocess.run(
+try:
+ __version__ = subprocess.run(
     [
         'git',
         '-C',
@@ -12,7 +13,10 @@ __version__ = subprocess.run(
     ],
     capture_output=True,
     text=True,
-).stdout.strip()
+ ).stdout.strip()
+except:
+ __version_info__ = (1,0,0)
+ __version__ = '.'.join(map(str,__version_info__))
 
 del subprocess
 del Path

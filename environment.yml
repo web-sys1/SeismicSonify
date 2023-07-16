@@ -7,6 +7,8 @@ dependencies:
   - obspy
   - pip
   - setuptools<58.4.0  # https://github.com/pypa/setuptools/issues/2497
+  - ipython
+  - python=3.10
   - tqdm
   - pip:
     - --editable .
