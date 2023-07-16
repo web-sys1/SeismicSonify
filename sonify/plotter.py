@@ -29,7 +29,7 @@ from scipy import signal
 from . import __version__
     
 
-# Add Tex Gyre Heros to Matplotlib
+# Add Tex Gyre Heros and JetBrains Mono to Matplotlib
 for font_path in font_manager.findSystemFonts(
     str(Path(__file__).resolve().parent / 'fonts')
 ):
@@ -56,7 +56,7 @@ FIGURE_WIDTH = 7.7  # [in] Sets effective font size, basically
 # For spectrograms
 REFERENCE_PRESSURE = 20e-6  # [Pa]
 REFERENCE_VELOCITY = 1  # [m/s]
-REFERENCE_ACCELERATION = 9.806 # [m/s**2] Peak acceleration 
+REFERENCE_ACCELERATION = 9.806 # g=gm/r^2 | [m/s**2] or [m/s/s]: Peak acceleration due to gravity
 
 MS_PER_S = 1000  # [ms/s]
 
@@ -527,7 +527,7 @@ def _spectrogram(
 
     plt.colorbar(im, cax, extend=extend, extendfrac=EXTENDFRAC, ax=fig.get_axes(), label=clab)
 
-    spec_ax.set_title(f'{tr.id} - {tr.stats.endtime}')
+    spec_ax.set_title(f'{tr.id} - {tr.stats.endtime}', family='JetBrains Mono')
 
     fig.tight_layout()
     fig.subplots_adjust(hspace=0, wspace=0.05)
