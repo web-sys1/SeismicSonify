@@ -1,10 +1,10 @@
-
 from obspy.core import read, Stream
 import numpy as np
 
 ## imports for mimicing obspy spectrograms
-from obspy.imaging.spectrogram import *
+from obspy.imaging.spectrogram import _nearest_pow_2
 from matplotlib import mlab
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 
 # colormaps. See https://docs.obspy.org/packages/autogen/obspy.imaging.cm.html
@@ -87,7 +87,7 @@ class IceWebSpectrogram:
             otherwise.
         :type cmap: :class:`matplotlib.colors.Colormap`
         :param cmap: Specify a custom colormap instance. If not specified, then the
-            pqlx colormap is used.
+            pqlx colormap is used. viridis_white_r might be worth trying too.
         :type clim: [float, float]
         :param clim: colormap limits. adjust colormap to clip at lower and/or upper end.
             This overrides equal_scale parameter.
@@ -125,7 +125,12 @@ class IceWebSpectrogram:
         fig, ax = plt.subplots(N*2, 1); # create fig and ax handles with approx positions for now
         fig.set_size_inches(5.76, 7.56); 
  
-        if equal_scale: # calculate range of spectral amplitudes
+        if clim:
+            if clim[0]<=clim[1]/100000:
+                print('Warning: Lower clim should be at least 1/10000 of Upper clim. This translates to a 100 dB range in amplitude')
+                clim[0]=clim[1]/100000
+ 
+        if equal_scale and not clim: # calculate range of spectral amplitudes
             if self.precomputed:
                 Smin, Smax = IceWebSpectrogram.get_S_range(self, fmin=fmin, fmax=fmax)
             else:
@@ -150,12 +155,14 @@ class IceWebSpectrogram:
             else:                
                 [T, F, S] = compute_spectrogram(tr, wlen=secsPerFFT)
         
-            # fix the axes positions for this trace and spectrogram
+            # fix the axes positions for this trace and spectrogram, making space for a colorbar at bottom if using a fixed scale
             if add_colorbar and clim:
+                print('plotting...')
                 spectrogramPosition, tracePosition = IceWebSpectrogram.calculateSubplotPositions(N, c, 
                                                                        frameBottom = 0.17, totalHeight = 0.80)
-                cax = fig.add_axes([spectrogramPosition[0], 0.08, spectrogramPosition[2], 0.02])
+                #cax = fig.add_axes([spectrogramPosition[0], 0.08, spectrogramPosition[2], 0.02])
             else:
+                print('using classic order...')
                 spectrogramPosition, tracePosition = IceWebSpectrogram.calculateSubplotPositions(N, c)
             ax[c*2].set_position(tracePosition)
             ax[c*2+1].set_position(spectrogramPosition)
@@ -181,14 +188,25 @@ class IceWebSpectrogram:
                 S = amp2dB(S)
             
             #print(vmin, vmax)
-            sgram_handle = ax[c*2+1].pcolormesh(T, F, S, vmin=vmin, vmax=vmax, cmap=cmap );
+            sgram_handle = ax[c*2+1].pcolormesh(T, F, S, vmin=vmin, vmax=vmax, cmap=cmap);
             ax[c*2+1].set_ylim(fmin, fmax)
+
+            # turn off xticklabels, except for bottom panel
+            ax[c*2].set_xticklabels([])
+            if c<N-1:
+                ax[c*2+1].set_xticklabels([])
+                
+            # add a ylabel
+            ax[c*2+1].set_ylabel('     ' + tr.stats.station + '.' + tr.stats.channel, rotation=80)
         
             # Plot colorbar
             if add_colorbar:
                 if clim: # Scaled. Add a colorbar at the bottom of the figure. Just do it once.
                     if c==0:
-                        plt.colorbar(sgram_handle, cax=cax, orientation='horizontal'); 
+                        norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
+                        #cax = fig.add_axes([0.2, 0.1, 0.6, 0.05])
+                        cax = fig.add_axes([spectrogramPosition[0], 0.08, spectrogramPosition[2], 0.02])
+                        cbar = fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=cmap), cax=cax, orientation='horizontal', label='Counts/Hz')
                         if dbscale:
                             cax.set_xlabel('dB relative to 1 m/s/Hz')
                             ''' 
@@ -211,14 +229,7 @@ class IceWebSpectrogram:
                     divider2 = make_axes_locatable(ax[c*2])
                     hide_ax = divider2.append_axes("right", size="5%", pad=0.05, visible=False)
                       
-            # add a ylabel
-            ax[c*2+1].set_ylabel('     ' + tr.stats.station + '.' + tr.stats.channel, rotation=80)
-            
-            # turn off xticklabels, except for bottom panel
-            ax[c*2].set_xticklabels([])
-            if c<N-1:
-                ax[c*2+1].set_xticklabels([])
-            
+
             # increment c and go to next trace (if any left)
             c += 1   
      
@@ -295,13 +306,16 @@ class IceWebSpectrogram:
             tr.stats.spectrum['peakA'] = max(A)
             tr.stats.spectrum['medianF'] = np.sum(np.dot(A, F))/np.sum(A)
             if compute_bandwidth:
-                Athresh = max(A)*0.707          
-                fn = interpolate.interp1d(F,  A)
-                xnew = np.arange(0, max(F), 0.1)
-                ynew = fn(xnew)
-                ind = np.argwhere(ynew>Athresh)
-                tr.stats.spectrum['bw_min'] = xnew[ind[0]]
-                tr.stats.spectrum['bw_max'] = xnew[ind[-1]]
+                try:
+                    Athresh = max(A)*0.707          
+                    fn = interpolate.interp1d(F,  A)
+                    xnew = np.arange(0, max(F), 0.1)
+                    ynew = fn(xnew)
+                    ind = np.argwhere(ynew>Athresh)
+                    tr.stats.spectrum['bw_min'] = xnew[ind[0]]
+                    tr.stats.spectrum['bw_max'] = xnew[ind[-1]]
+                except:
+                    print('Could not compute bandwidth')
             for key in tr.stats.spectrum:
                 v = tr.stats.spectrum[key]
                 if np.ndim(v)==1:
@@ -317,7 +331,7 @@ class IceWebSpectrogram:
                 continue
             A = tr.stats.spectrum.A   
             F = tr.stats.spectrum.F
-            ax[c].plot(F,  A);
+            ax[c].semilogy(F,  A);
             ax[c].set_ylabel('Spectral Amplitude:\n%s/Hz' % tr.stats.units)
             ax[c].set_xlabel('SSAM bin (Hz?)')
             ax[c].set_title(tr.id)       

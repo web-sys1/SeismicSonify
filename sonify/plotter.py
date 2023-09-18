@@ -77,7 +77,7 @@ def seisPlotter(
     output_disposal=None,
     pre_filt=None,
     filter_type='bandpass',
-    h_freq=0.98,
+    h_freq=0.88,
     l_freq=None,
     wf_freq=None,
     freqmin=None,
@@ -226,27 +226,40 @@ def seisPlotter(
         )
     if not freqmin:
         freqmin = LOWEST_AUDIBLE_FREQUENCY / speed_up_factor
+     
+    freq_average = (tr.stats.sampling_rate / 2.05) - 2
+    freq_peak = tr.stats.sampling_rate / 2
     
     # If you do not specify 'remove_response', then: set the parameter to 0 (int zero) to skip removal.
     output_units = ['ACC', 'DEF', 'DISP', 'VEL']
 
     if remove_response==1:
-     tr.remove_response(inventory=inv)  # Units are m/s OR Pa after response removal. By default, when remove_response set to 1, then result is equivalent to what the scale is.
+     tr.remove_response(inventory=inv,
+                        pre_filt=
+                        (
+                        0.0008,
+                        0.005,
+                        freq_average,
+                        freq_peak
+                        ),
+                        plot='stmf.png',
+                        )  # Units are m/s OR Pa after response removal. 
+                           # By default, when remove_response set to 1, then result is equivalent to what the scale is.
      tr.detrend('demean')
      tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
-    elif remove_response==2: # These output types are 'ACC', 'DEF', 'DISP', or 'VEL'.
+    elif remove_response==2: # These output types are 'ACC', 'DEF', 'DISP'.
      if output_disposal=='ACC' in output_units:
        tr.remove_response(inventory=inv, output='ACC', pre_filt=pre_filt)
      elif output_disposal=='DEF' in output_units:
        tr.remove_response(inventory=inv, output='DEF', pre_filt=pre_filt)       
      elif output_disposal=='DISP' in output_units:
        tr.remove_response(inventory=inv, output='DISP', pre_filt=pre_filt)
-     elif output_disposal=='VEL' in output_units:
-       tr.remove_response(inventory=inv, output='VEL', pre_filt=pre_filt)
      elif output_disposal is None:
        raise Exception("Parameter 'output_disposal' required. Please specify: 'ACC', 'DEF', 'DISP', or 'VEL'")
      elif output_disposal not in output_units:
        raise ValueError("'{0}' not a exact value".format(output_units))
+    elif remove_response==3: # It removes sensitivity. Recommended for strong-motion measurements.
+     tr.remove_sensitivity(inventory=inv)
     elif remove_response==0:
      print("Skipping response removal...")
     else: 
@@ -259,7 +272,7 @@ def seisPlotter(
      tr.filter('bandpass', freqmin=freqmin, freqmax=freqmax, corners=2, zerophase=True)
     elif filter_type == 'highpass':
      print(f'Applying {h_freq:g} Hz highpass')
-     tr.filter('highpass', freq=h_freq, corners=2, zerophase=False)
+     tr.filter('highpass', freq=h_freq-.46, corners=2, zerophase=True)
     elif filter_type == 'lowpass':
      print(f'Applying {l_freq:g} Hz lowpass')
      tr.filter('lowpass', freq=l_freq, corners=2, zerophase=True)
@@ -389,7 +402,7 @@ def _spectrogram(
     nperseg = int(spec_win_dur * fs)  # Samples
     nfft = np.power(2, int(np.ceil(np.log2(nperseg))) + 1)  # Pad fft with zeroes
 
-    #print('Sample buffering: {} .. {} per {} (fs)'.format(nperseg, nfft, fs))
+    print('Sample buffering: {} .. {} per {}Hz (fs)'.format(nperseg, nfft, fs))
 
 
     f, t, sxx = signal.spectrogram(
@@ -424,7 +437,7 @@ def _spectrogram(
     
     if filter_type == 'bandpass':
       wf_t.detrend("linear")
-      wf_t.filter('bandpass', freqmin=wf_freq, freqmax=freq_lim[1], corners=2, zerophase=True)
+      wf_t.filter('bandpass', freqmin=wf_freq, freqmax=freq_lim[1], corners=2, zerophase=False)
     elif filter_type == 'lowpass':
       wf_t.filter('lowpass', freq=lowhig_freqs[0], corners=2, zerophase=False)
     elif filter_type == 'highpass':
@@ -446,12 +459,15 @@ def _spectrogram(
     max_value = np.abs(wf_t.copy().trim(starttime, endtime).data).max() * rescale
     
     if scaling == 'auto':
-      print("Max value: ", max_value)
+      print("Max value: ", round(max_value, 2))
       wf_ax.set_ylim(-max_value, max_value)
     elif scaling == 'other':
-      print('Num. count:', num)
+     if num:
       wf_ax.set_ylim(-num, num)
-    
+     else:
+      num = (max_value * tr.count() / tr.stats.npts) ** .25
+      print("Max value: ", num)
+      wf_ax.set_ylim(-num, num)
     im = spec_ax.pcolormesh(
         t_mpl, f, sxx_db, cmap=colormap, shading='nearest', rasterized=True
     )
@@ -604,7 +620,7 @@ def _spectrogram(
     elif specOpts is None:
      pass
     else:
-     raise ValueError('specOpts argument has unexpected non-valid choice. Cannot proceed.')
+     raise ValueError(f'specOpts argument "{specOpts}" has unexpected non-valid choice. Cannot proceed.')
      
     return fig, tr, wf_ax, spec_line, wf_line, time_box, wf_progress
 
