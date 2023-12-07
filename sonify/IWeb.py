@@ -1,10 +1,11 @@
 from obspy.core import read, Stream
 import numpy as np
-
+from sonify.plotter import _UTCDateFormatter
 ## imports for mimicing obspy spectrograms
 from obspy.imaging.spectrogram import _nearest_pow_2
 from matplotlib import mlab
 import matplotlib as mpl
+import matplotlib.dates as dates
 import matplotlib.pyplot as plt
 
 # colormaps. See https://docs.obspy.org/packages/autogen/obspy.imaging.cm.html
@@ -168,7 +169,8 @@ class IceWebSpectrogram:
             ax[c*2+1].set_position(spectrogramPosition)
         
             # plot the trace
-            t = tr.times()
+            t = tr.times('matplotlib')
+            
             ax[c*2].plot(t, tr.data, linewidth=0.5);
             ax[c*2].set_yticks(ticks=[]) # turn off yticks
         
@@ -232,8 +234,12 @@ class IceWebSpectrogram:
 
             # increment c and go to next trace (if any left)
             c += 1   
-     
-        ax[N*2-1].set_xlabel('Time [s]')
+
+        ax[N*2-1].set_xlabel('Time plot [s]')
+        
+        locator = mdates.AutoDateLocator()
+        ax[N*2-1].xaxis.set_major_locator(locator)
+        ax[N*2-1].xaxis.set_major_formatter(_UTCDateFormatter(locator, None))
     
         if title:
             ax[0].set_title(title)
@@ -246,7 +252,7 @@ class IceWebSpectrogram:
             ax[c*2].grid(axis='x', linestyle = ':', linewidth=0.5)
             ax[c*2+1].set_xlim(0, max_t)
             ax[c*2+1].grid(True, linestyle = ':', linewidth=0.5)    
-
+        
         # change all font sizes
         plt.rcParams.update({'font.size': 8});    
                 

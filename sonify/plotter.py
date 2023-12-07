@@ -9,7 +9,7 @@ from pathlib import Path
 from types import MethodType
 
 import colorcet as cc
-import matplotlib
+import matplotlib as mpl
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -71,6 +71,7 @@ def seisPlotter(
     station='',
     location='*',
     channel='',
+    inv_file=None,
     starttime=None,
     endtime=None,
     remove_response=None,
@@ -93,10 +94,11 @@ def seisPlotter(
     scaling='auto',
     spectral_scaling='density',
     cmap='inferno',
-    toggle_waveform=True,
+    switchaxes=False,
     num=None,
     log=False,
     specOpts=None,
+    fName='',
     utc_offset=None,
 ):
     r"""
@@ -169,7 +171,8 @@ def seisPlotter(
     tr = st[0]
     
     # Now that we have just one Trace, get inventory (which has response info)
-    inv = client.get_stations(
+    if not inv_file:
+     inv = client.get_stations(
         network=tr.stats.network,
         station=tr.stats.station,
         location=tr.stats.location,
@@ -177,8 +180,9 @@ def seisPlotter(
         starttime=tr.stats.starttime,
         endtime=tr.stats.endtime,
         level='response',
-    )
-    
+     )
+    elif inv_file:
+     inv = obspy.read_inventory(inv_file, level="response")
     # Adjust starttime so we have nice numbers in time box (carefully!)
     offset = np.abs(tr.stats.starttime - (starttime - PAD))  # [s]
     if offset > tr.stats.delta:
@@ -229,24 +233,21 @@ def seisPlotter(
      
     freq_average = (tr.stats.sampling_rate / 2.05) - 2
     freq_peak = tr.stats.sampling_rate / 2
-    
+    pre_filt = (
+               0.004,
+               0.08,
+               freq_average,
+               freq_peak
+               )
     # If you do not specify 'remove_response', then: set the parameter to 0 (int zero) to skip removal.
-    output_units = ['ACC', 'DEF', 'DISP', 'VEL']
+    output_units = ['ACC', 'DEF', 'DISP']
 
     if remove_response==1:
-     tr.remove_response(inventory=inv,
-                        pre_filt=
-                        (
-                        0.0008,
-                        0.005,
-                        freq_average,
-                        freq_peak
-                        ),
-                        plot='stmf.png',
-                        )  # Units are m/s OR Pa after response removal. 
-                           # By default, when remove_response set to 1, then result is equivalent to what the scale is.
+     tr.remove_response(inventory=inv, pre_filt=pre_filt)  # Units are m/s OR Pa after response removal. 
+     # By default, when remove_response set to 1, then result is equivalent to what the scale is.
      tr.detrend('demean')
      tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
+     
     elif remove_response==2: # These output types are 'ACC', 'DEF', 'DISP'.
      if output_disposal=='ACC' in output_units:
        tr.remove_response(inventory=inv, output='ACC', pre_filt=pre_filt)
@@ -255,13 +256,16 @@ def seisPlotter(
      elif output_disposal=='DISP' in output_units:
        tr.remove_response(inventory=inv, output='DISP', pre_filt=pre_filt)
      elif output_disposal is None:
-       raise Exception("Parameter 'output_disposal' required. Please specify: 'ACC', 'DEF', 'DISP', or 'VEL'")
+       raise Exception("Parameter 'output_disposal' required. Please specify: 'ACC', 'DEF', 'DISP'")
      elif output_disposal not in output_units:
        raise ValueError("'{0}' not a exact value".format(output_units))
+       
     elif remove_response==3: # It removes sensitivity. Recommended for strong-motion measurements.
      tr.remove_sensitivity(inventory=inv)
+     
     elif remove_response==0:
      print("Skipping response removal...")
+     
     else: 
      print("Parameter 'remove_response' doesn't have exact value. Skipping process...")
      sys.exit(-1)
@@ -269,7 +273,7 @@ def seisPlotter(
     if filter_type == 'bandpass':
      tr.detrend("linear")
      print(f'Applying {freqmin:g}-{freqmax:g} Hz bandpass, filtering waveform {wf_freq:g}.')
-     tr.filter('bandpass', freqmin=freqmin, freqmax=freqmax, corners=2, zerophase=True)
+     tr.filter('bandpass', freqmin=freqmin, freqmax=freqmax, corners=2, zerophase=False)
     elif filter_type == 'highpass':
      print(f'Applying {h_freq:g} Hz highpass')
      tr.filter('highpass', freq=h_freq-.46, corners=2, zerophase=True)
@@ -287,12 +291,12 @@ def seisPlotter(
     times = timing_tr.times('UTCDateTime')[:-1]  # Remove extra frame
 
     # Store user's rc settings, then update font stuff
-    original_params = matplotlib.rcParams.copy()
-    matplotlib.rcParams.update(matplotlib.rcParamsDefault)
-    matplotlib.rcParams['font.sans-serif'] = 'Tex Gyre Heros'
-    matplotlib.rcParams['mathtext.fontset'] = 'custom'
+    original_params = mpl.rcParams.copy()
+    mpl.rcParams.update(mpl.rcParamsDefault)
+    mpl.rcParams['font.sans-serif'] = 'Tex Gyre Heros'
+    mpl.rcParams['mathtext.fontset'] = 'custom'
 
-    fig, tr_w, wf_ax, *fargs = _spectrogram(
+    fig, tr_w, wf_ax, spec_ax, *fargs = _spectrogram(
         tr,
         starttime,
         endtime,
@@ -313,13 +317,13 @@ def seisPlotter(
         utc_offset is not None,
         resolution,
         specOpts=specOpts,
-        fileName=f"{tr.id}_spec+{int(float(endtime.timestamp) * 1000)}",
-        toggle_waveform=toggle_waveform,
+        fileName=fName if fName else f"{tr.id}_spec+{int(float(endtime.timestamp) * 1000)}",
+        switchaxes=switchaxes,
     )
     
     # Clean up temporary directory, just to be safe
     #temp_dir.cleanup()
-    return fig, tr, offset, wf_ax, starttime, endtime
+    return fig, tr, wf_ax, spec_ax, starttime, endtime
 
 
 def _spectrogram(
@@ -344,7 +348,7 @@ def _spectrogram(
     resolution,
     specOpts='',
     fileName='',
-    toggle_waveform=True,
+    switchaxes=False,
     ):
     
     """
@@ -422,18 +426,22 @@ def _spectrogram(
     t_mpl = tr.stats.starttime.matplotlib_date + (t / mdates.SEC_PER_DAY)
     
     # Ensure a 16:9 aspect ratio
-    FIGURE_WIDTH = 7.7
     fig = plt.figure(figsize=(FIGURE_WIDTH, (9 / 16) * FIGURE_WIDTH))
     # set color
     fig.set_facecolor('#fcfcfc')
     # width_ratios effectively controls the colorbar width
-    gs = GridSpec(2, 2, figure=fig, height_ratios=[4, 1], width_ratios=[40, 1])
-    
-    spec_ax = fig.add_subplot(gs[0, 0])
-    wf_ax = fig.add_subplot(gs[1, 0], sharex=spec_ax)  # Share x-axis with spec
-    cax = fig.add_subplot(gs[0, 1])
-    
-    wf_t = tr.copy()
+    if switchaxes==True: # Switch position of axes between waveform and spectrogram.
+      gs = GridSpec(2, 2, figure=fig, height_ratios=[1, 4], width_ratios=[40, 1])
+      spec_ax = fig.add_subplot(gs[1, 0])
+      wf_ax = fig.add_subplot(gs[0, 0], sharex=spec_ax)  # Share x-axis with spec
+      cax = fig.add_subplot(gs[1, 1])
+      wf_t = tr.copy()
+    elif switchaxes==False:
+      gs = GridSpec(2, 2, figure=fig, height_ratios=[4, 1], width_ratios=[40, 1])
+      spec_ax = fig.add_subplot(gs[0, 0])
+      wf_ax = fig.add_subplot(gs[1, 0], sharex=spec_ax)  # Share x-axis with spec
+      cax = fig.add_subplot(gs[0, 1])
+      wf_t = tr.copy()    
     
     if filter_type == 'bandpass':
       wf_t.detrend("linear")
@@ -473,7 +481,7 @@ def _spectrogram(
     )
 
     spec_ax.set_ylabel('Frequency (Hz)')
-    spec_ax.grid(False)
+    spec_ax.grid(linestyle=':')
     spec_ax.set_ylim(freq_lim)
     if log:
         spec_ax.set_yscale('log')
@@ -503,7 +511,7 @@ def _spectrogram(
     offset_px = -0.0025 * RESOLUTIONS[resolution][1]  # Resolution-independent!
     time_box.txt._text.set_y(offset_px)  # [pixels] Vertically center text
     time_box.zorder = 12  # This should place it on the very top; see below
-    #time_box.patch.set_linewidth(matplotlib.rcParams['axes.linewidth'])
+    #time_box.patch.set_linewidth(mpl.rcParams['axes.linewidth'])
     #wf_ax.add_artist(time_box)
 
     # Adjustments to ensure time marker line is zordered properly
@@ -540,21 +548,27 @@ def _spectrogram(
         extend = 'max'
     else:
         extend = 'neither'
-
+        
     plt.colorbar(im, cax, extend=extend, extendfrac=EXTENDFRAC, ax=fig.get_axes(), label=clab)
-
-    spec_ax.set_title(f'{tr.id} - {tr.stats.endtime}', family='JetBrains Mono')
+    
+    if switchaxes==False:
+           spec_ax.set_title(f'{tr.id} - {tr.stats.endtime}', family='JetBrains Mono')
+    elif switchaxes==True:
+           wf_ax.set_title(f'{tr.id} - {tr.stats.endtime}', family='JetBrains Mono')
 
     fig.tight_layout()
     fig.subplots_adjust(hspace=0, wspace=0.05)
     
     
-    if toggle_waveform == False:
+    if switchaxes == True:
+     fig.autofmt_xdate()
      spec_ax.xaxis.set_major_locator(locator)
      spec_ax.xaxis.set_major_formatter(_UTCDateFormatter(locator, is_local_time))
+     plt.setp(wf_ax.get_xticklabels(), visible=False)
+     wf_ax.tick_params(axis='x', which='both', length=0, labelbottom=False)
      plt.setp(spec_ax.xaxis.get_majorticklabels(), rotation = 45)
-     fig.delaxes(wf_ax)
-    elif toggle_waveform == True:
+     #fig.delaxes(wf_ax)
+    elif switchaxes == False:
      fig.autofmt_xdate()
      plt.setp(spec_ax.get_xticklabels(), visible=False)
      spec_ax.tick_params(axis='x', which='both', length=0, labelbottom=False)
@@ -595,34 +609,35 @@ def _spectrogram(
         )
         
     if specOpts == "saveAsPngFile":
-     from matplotlib.artist import Artist 
-     outFile=str(fileName)
+     from matplotlib.artist import Artist
      try:
        Artist.remove(time_box)
      except:
        pass
-     fig.savefig(outFile + '.png', format='png', dpi=RESOLUTIONS[resolution][0] / FIGURE_WIDTH)
+     print("Resolution", plt.gcf().get_size_inches(), fig.get_dpi())
+     fig.savefig(fileName, format='png', dpi=RESOLUTIONS[resolution][0] / FIGURE_WIDTH)
      print('Fig. size:', plt.gcf().get_size_inches())
      print('DPI:', fig.get_dpi())
      print('File Saved as PNG')
     elif specOpts == "saveAsPDF":
      from matplotlib.artist import Artist
      spec_ax.set_rasterized(True)
-     outFile=str(fileName)
-     fig.savefig(outFile + '.pdf', format='pdf', dpi=RESOLUTIONS[resolution][0] / FIGURE_WIDTH, bbox_inches='tight')
+     #outFile=str(fileName)
+     fig.savefig(f"{fileName}" + ".pdf", format='pdf', dpi=RESOLUTIONS[resolution][0] / FIGURE_WIDTH, bbox_inches='tight')
      print('File Saved as PDF.') 
     elif specOpts == "interactive": # mode [Preview] : preview as interactive
      #plt.ion()
-     fig.set_size_inches(12, 8)
+     fig.set_size_inches(10, 8)
      print('Fig. size:', plt.gcf().get_size_inches())
      print('DPI', fig.get_dpi())
      plt.show(block=True)
     elif specOpts is None:
-     pass
+     print("DPI:", fig.get_dpi())
+     #pass
     else:
      raise ValueError(f'specOpts argument "{specOpts}" has unexpected non-valid choice. Cannot proceed.')
      
-    return fig, tr, wf_ax, spec_line, wf_line, time_box, wf_progress
+    return fig, tr, wf_ax, spec_ax, spec_line, wf_line, time_box, wf_progress
 
 def maximize():
     plot_backend = plt.get_backend()
@@ -737,11 +752,6 @@ def main():
         help='resolution of output video; one of "crude" (640 x 360), "720p" (1280 x 720), "1080p" (1920 x 1080), "2K" (2560 x 1440), or "4K" (3840 x 2160)',
     )
     parser.add_argument(
-        '--output_dir',
-        default=None,
-        help='directory where output video should be saved (defaults to current working directory)',
-    )
-    parser.add_argument(
         '--spec_win_dur',
         default=5,
         type=float,
@@ -802,7 +812,6 @@ def main():
         input_args.speed_up_factor,
         input_args.fps,
         input_args.resolution,
-        input_args.output_dir,
         input_args.spec_win_dur,
         db_lim,
         input_args.log,
