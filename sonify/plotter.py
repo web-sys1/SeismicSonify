@@ -83,7 +83,6 @@ def seisPlotter(
     wf_freq=None,
     freqmin=None,
     freqmax=None,
-    base_url=False,
     speed_up_factor=200,
     fps=1,
     rescale=1e6,
@@ -91,7 +90,7 @@ def seisPlotter(
     output_dir=None,
     spec_win_dur=5,
     db_lim='smart',
-    scaling='auto',
+    unit_scale='auto',
     spectral_scaling='density',
     cmap='inferno',
     switchaxes=False,
@@ -231,14 +230,15 @@ def seisPlotter(
     if not freqmin:
         freqmin = LOWEST_AUDIBLE_FREQUENCY / speed_up_factor
      
-    freq_average = (tr.stats.sampling_rate / 2.05) - 2
-    freq_peak = tr.stats.sampling_rate / 2
-    pre_filt = (
-               0.004,
-               0.08,
-               freq_average,
-               freq_peak
-               )
+    if not pre_filt:
+       freq_average = (tr.stats.sampling_rate / 2.05) - 2
+       freq_peak = tr.stats.sampling_rate / 2
+       pre_filt = (
+                  0.004,
+                  0.08,
+                  freq_average,
+                  freq_peak
+                  )
     # If you do not specify 'remove_response', then: set the parameter to 0 (int zero) to skip removal.
     output_units = ['ACC', 'DEF', 'DISP']
 
@@ -271,7 +271,7 @@ def seisPlotter(
      sys.exit(-1)
 
     if filter_type == 'bandpass':
-     tr.detrend("linear")
+     #tr.detrend("linear")
      print(f'Applying {freqmin:g}-{freqmax:g} Hz bandpass, filtering waveform {wf_freq:g}.')
      tr.filter('bandpass', freqmin=freqmin, freqmax=freqmax, corners=2, zerophase=False)
     elif filter_type == 'highpass':
@@ -305,7 +305,7 @@ def seisPlotter(
         rescale,
         spec_win_dur,
         db_lim,
-        scaling,
+        unit_scale,
         num,
         spectral_scaling,
         cmap,
@@ -335,7 +335,7 @@ def _spectrogram(
     rescale,
     spec_win_dur,
     db_lim,
-    scaling,
+    unit_scale,
     num,
     spectral_scaling,
     colormap,
@@ -444,7 +444,6 @@ def _spectrogram(
       wf_t = tr.copy()    
     
     if filter_type == 'bandpass':
-      wf_t.detrend("linear")
       wf_t.filter('bandpass', freqmin=wf_freq, freqmax=freq_lim[1], corners=2, zerophase=False)
     elif filter_type == 'lowpass':
       wf_t.filter('lowpass', freq=lowhig_freqs[0], corners=2, zerophase=False)
@@ -452,7 +451,6 @@ def _spectrogram(
       wf_t.filter('highpass', freq=lowhig_freqs[1], corners=2, zerophase=True)
     else:
       raise TypeError('Invalid frequency output')
-
     
     wf_lw = 0.5
     wf_ax.plot(wf_t.times('matplotlib'), wf_t.data * rescale, 'b', linewidth=wf_lw) #wf_t.data * rescale
@@ -466,10 +464,10 @@ def _spectrogram(
     wf_ax.grid(linestyle=':')
     max_value = np.abs(wf_t.copy().trim(starttime, endtime).data).max() * rescale
     
-    if scaling == 'auto':
+    if unit_scale == 'auto':
       print("Max value: ", round(max_value, 2))
       wf_ax.set_ylim(-max_value, max_value)
-    elif scaling == 'other':
+    elif unit_scale == 'other':
      if num:
       wf_ax.set_ylim(-num, num)
      else:
@@ -555,25 +553,25 @@ def _spectrogram(
            spec_ax.set_title(f'{tr.id} - {tr.stats.endtime}', family='JetBrains Mono')
     elif switchaxes==True:
            wf_ax.set_title(f'{tr.id} - {tr.stats.endtime}', family='JetBrains Mono')
-
+           
     fig.tight_layout()
     fig.subplots_adjust(hspace=0, wspace=0.05)
     
     
     if switchaxes == True:
-     fig.autofmt_xdate()
-     spec_ax.xaxis.set_major_locator(locator)
-     spec_ax.xaxis.set_major_formatter(_UTCDateFormatter(locator, is_local_time))
-     plt.setp(wf_ax.get_xticklabels(), visible=False)
-     wf_ax.tick_params(axis='x', which='both', length=0, labelbottom=False)
-     plt.setp(spec_ax.xaxis.get_majorticklabels(), rotation = 45)
-     #fig.delaxes(wf_ax)
+      fig.autofmt_xdate()
+      spec_ax.xaxis.set_major_locator(locator)
+      spec_ax.xaxis.set_major_formatter(_UTCDateFormatter(locator, is_local_time))
+      plt.setp(wf_ax.get_xticklabels(), visible=False)
+      wf_ax.tick_params(axis='x', which='both', length=0, labelbottom=False)
+      plt.setp(spec_ax.xaxis.get_majorticklabels(), rotation = 45)
+      #fig.delaxes(wf_ax)
     elif switchaxes == False:
-     fig.autofmt_xdate()
-     plt.setp(spec_ax.get_xticklabels(), visible=False)
-     spec_ax.tick_params(axis='x', which='both', length=0, labelbottom=False)
-    
-    
+      fig.autofmt_xdate()
+      plt.setp(spec_ax.get_xticklabels(), visible=False)
+      spec_ax.tick_params(axis='x', which='both', length=0, labelbottom=False)
+     
+     
     # Finnicky formatting to get extension triangles (if they exist) to extend
     # above and below the vertical extent of the spectrogram axes
     pos = cax.get_position()
@@ -797,7 +795,7 @@ def main():
         db_lim_error = True
     if db_lim_error:
         parser.error(
-            'argument --db_lim: must be one of "smart", "None", or two numeric values "<min>" "<max>"'
+            'dB Limit <argument --db_lim>: must be one of "smart", "None", or two numeric values "<min>" "<max>"'
         )
 
     sonify(

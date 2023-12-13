@@ -7,9 +7,12 @@ import tempfile
 import warnings
 from pathlib import Path
 from types import MethodType
+import colorcet as cc
 
 import matplotlib
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+
 import numpy as np
 from matplotlib import font_manager
 from matplotlib.animation import FuncAnimation
@@ -59,24 +62,25 @@ MS_PER_S = 1000  # [ms/s]
 EXTENDFRAC = 0.04
 
 def sonify(
-    FDSN_service,
-    network,
-    station,
-    channel,
-    starttime,
-    endtime,
+    type='local',
+    file='',
+    fdsn_client='IRIS',
+    network='',
+    station='',
+    channel='',
+    inv_file=None,
+    starttime=None,
+    endtime=None,
     location='*',
     remove_response=None,
     output_disposal=None,
     pre_filt=None,
     filter_type='bandpass',
-    h_freq=None,
+    h_freq=0.96,
     l_freq=None,
     wf_freq=None,
     freqmin=None,
     freqmax=None,
-    TmB=None,
-    base_url=False,
     speed_up_factor=200,
     fps=1,
     rescale=1e6,
@@ -85,9 +89,13 @@ def sonify(
     spec_win_dur=5,
     db_lim='smart',
     unit_scale='auto',
+    spectral_scaling='density',
+    cmap='inferno',
+    switchaxes=False,
     num=None,
     log=False,
-    specOpts='',
+    specOpts=None,
+    fName='',
     utc_offset=None,
 ):
     r"""
@@ -136,17 +144,10 @@ def sonify(
     if not output_dir.exists():
         raise FileNotFoundError(f'Directory {output_dir} does not exist!')
     
-    fdsn_client = str(FDSN_service)
-    
-    if base_url == True:
-      client = Client(base_url=fdsn_client)
-    elif not base_url:
-      client = Client(fdsn_client)
-
-    #client = Client('IRIS')
-
-    print('Retrieving data...')
-    st = client.get_waveforms(
+    if type=='FDSN':
+     print('Retrieving data...')
+     client = Client(fdsn_client, debug=True, timeout=300)
+     st = client.get_waveforms(
         network=network,
         station=station,
         location=location,
@@ -154,10 +155,12 @@ def sonify(
         starttime=starttime - PAD,
         endtime=endtime + PAD,
     )
+    elif type=='local':
+     print(f"Reading {file}")
+     st = obspy.read(file)
     
     if not st:
         raise_on_error(204, None)  # If Stream is empty, then raise FDSNNoDataException
-    
     print('Done')
 
     # Merge Traces with the same IDs
@@ -169,9 +172,9 @@ def sonify(
             print(tr.id)
     tr = st[0]
     
-    
     # Now that we have just one Trace, get inventory (which has response info)
-    inv = client.get_stations(
+    if not inv_file:
+     inv = client.get_stations(
         network=tr.stats.network,
         station=tr.stats.station,
         location=tr.stats.location,
@@ -179,8 +182,9 @@ def sonify(
         starttime=tr.stats.starttime,
         endtime=tr.stats.endtime,
         level='response',
-    )
-
+     )
+    elif inv_file:
+     inv = obspy.read_inventory(inv_file, level="response")
     # Adjust starttime so we have nice numbers in time box (carefully!)
     offset = np.abs(tr.stats.starttime - (starttime - PAD))  # [s]
     if offset > tr.stats.delta:
@@ -221,10 +225,17 @@ def sonify(
         )
     if not freqmin:
         freqmin = LOWEST_AUDIBLE_FREQUENCY / speed_up_factor
-        
-    if TmB == None:
-       raise IndexError('Timebox (TmB) bool is missing. Must be either True or False.')    
-
+    
+    if not pre_filt:
+       freq_average = (tr.stats.sampling_rate / 2.05) - 2
+       freq_peak = tr.stats.sampling_rate / 2
+       pre_filt = (
+                  0.004,
+                  0.08,
+                  freq_average,
+                  freq_peak
+                  )
+                  
     # If you do not specify 'remove_response', then: set the parameter to 0 (int zero) to skip removal.
     
     output_units = ['ACC', 'DEF', 'DISP', 'VEL']
@@ -245,7 +256,11 @@ def sonify(
      elif output_disposal is None:
        raise Exception("Parameter 'output_disposal' required. Please specify: 'ACC', 'DEF', 'DISP', or 'VEL'")
      elif output_disposal not in output_units:
-       raise ValueError("'{0}' not a exact value".format(output_units))    
+       raise ValueError("'{0}' not a exact value".format(output_units)) 
+       
+    elif remove_response==3: # It removes sensitivity. Recommended for strong-motion measurements.
+     tr.remove_sensitivity(inventory=inv)
+       
     elif remove_response==0: 
       print("Skipping response removal...")
     else: 
@@ -321,6 +336,8 @@ def sonify(
         db_lim,
         unit_scale,
         num,
+        spectral_scaling,
+        cmap,
         wf_freq,
         (freqmin, freqmax),
         filter_type,
@@ -328,11 +345,11 @@ def sonify(
         log,
         utc_offset is not None,
         resolution,
-        timeBox=TmB,
+        timeBox=True,
         specOpts=specOpts,
-        fileName=tr.id
+        fileName=fName if fName else f"{tr.id}_spec+{int(float(endtime.timestamp) * 1000)}",
+        switchaxes=switchaxes,
     )
-
     # Create animation
     interval = ((1 / timing_tr.stats.sampling_rate) * MS_PER_S) / speed_up_factor
     animation = FuncAnimation(
@@ -379,6 +396,8 @@ def _spectrogram(
     db_lim,
     unit_scale,
     num,
+    spectral_scaling,
+    colormap,
     wf_freq,
     freq_lim,
     filter_type,
@@ -389,6 +408,7 @@ def _spectrogram(
     timeBox=False,
     specOpts='',
     fileName='',
+    switchaxes=False,
 ):
     """
     Make a combination waveform and spectrogram plot for an infrasound or
@@ -446,13 +466,18 @@ def _spectrogram(
     fig.patch.set_facecolor('#f5f5f5')
     fig.patch.set_alpha(0.2) 
     # width_ratios effectively controls the colorbar width
-    gs = GridSpec(2, 2, figure=fig, height_ratios=[2, 1], width_ratios=[40, 1])
-
-    spec_ax = fig.add_subplot(gs[0, 0])
-    wf_ax = fig.add_subplot(gs[1, 0], sharex=spec_ax)  # Share x-axis with spec
-    cax = fig.add_subplot(gs[0, 1])
-
-    wf_t = tr.copy()
+    if switchaxes==True: # Switch position of axes between waveform and spectrogram.
+      gs = GridSpec(2, 2, figure=fig, height_ratios=[1, 4], width_ratios=[40, 1])
+      spec_ax = fig.add_subplot(gs[1, 0])
+      wf_ax = fig.add_subplot(gs[0, 0], sharex=spec_ax)  # Share x-axis with spec
+      cax = fig.add_subplot(gs[1, 1])
+      wf_t = tr.copy()
+    elif switchaxes==False:
+      gs = GridSpec(2, 2, figure=fig, height_ratios=[4, 1], width_ratios=[40, 1])
+      spec_ax = fig.add_subplot(gs[0, 0])
+      wf_ax = fig.add_subplot(gs[1, 0], sharex=spec_ax)  # Share x-axis with spec
+      cax = fig.add_subplot(gs[0, 1])
+      wf_t = tr.copy()    
 
     if filter_type == 'bandpass':
       wf_t.filter('bandpass', freqmin=wf_freq, freqmax=freq_lim[1], zerophase=True)
@@ -460,7 +485,8 @@ def _spectrogram(
       wf_t.filter('lowpass', freq=lowhig_freqs[0], corners=2, zerophase=True)
     elif filter_type == 'highpass':
       wf_t.filter('highpass', freq=lowhig_freqs[1], corners=2, zerophase=True)
-
+    else:
+      raise TypeError('Invalid frequency output')
 
     wf_lw = 0.5
     wf_ax.plot(wf_t.times('matplotlib'), wf_t.data * rescale, 'r', linewidth=wf_lw)
@@ -555,12 +581,29 @@ def _spectrogram(
         extend = 'neither'
 
     fig.colorbar(im, cax, extend=extend, extendfrac=EXTENDFRAC, label=clab)
-
-    spec_ax.set_title(tr.id, family='JetBrains Mono')
+    
+    if switchaxes==False:
+           spec_ax.set_title(f'{tr.id} - {tr.stats.endtime}', family='JetBrains Mono')
+    elif switchaxes==True:
+           wf_ax.set_title(f'{tr.id} - {tr.stats.endtime}', family='JetBrains Mono')
 
     fig.tight_layout()
     fig.subplots_adjust(hspace=0, wspace=0.05)
 
+
+    if switchaxes == True:
+      fig.autofmt_xdate()
+      spec_ax.xaxis.set_major_locator(locator)
+      spec_ax.xaxis.set_major_formatter(_UTCDateFormatter(locator, is_local_time))
+      plt.setp(wf_ax.get_xticklabels(), visible=False)
+      wf_ax.tick_params(axis='x', which='both', length=0, labelbottom=False)
+      plt.setp(spec_ax.xaxis.get_majorticklabels(), rotation = 45)
+    elif switchaxes == False:
+      fig.autofmt_xdate()
+      plt.setp(spec_ax.get_xticklabels(), visible=False)
+      spec_ax.tick_params(axis='x', which='both', length=0, labelbottom=False)
+     
+     
     # Finnicky formatting to get extension triangles (if they exist) to extend
     # above and below the vertical extent of the spectrogram axes
     pos = cax.get_position()
