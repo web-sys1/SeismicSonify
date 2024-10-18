@@ -96,7 +96,6 @@ def seisPlotter(
     spec_win_dur=5,
     db_lim='smart',
     unit_scale='auto',
-    spectral_scaling='density',
     cmap='inferno',
     switchaxes=False,
     num=None,
@@ -308,7 +307,6 @@ def seisPlotter(
         db_lim,
         unit_scale,
         num,
-        spectral_scaling,
         cmap,
         wf_freq,
         (freqmin, freqmax),
@@ -338,7 +336,6 @@ def _spectrogram(
     db_lim,
     unit_scale,
     num,
-    spectral_scaling,
     colormap,
     wf_freq,
     freq_lim,
@@ -400,30 +397,24 @@ def _spectrogram(
             )
         ref_val = REFERENCE_VELOCITY
         
-    
-    #print('Spectral scaling:', spectral_scaling)
-    
+        
     fs = tr.stats.sampling_rate
     nperseg = int(spec_win_dur * fs)  # Samples
     nfft = np.power(2, int(np.ceil(np.log2(nperseg))) + 1)  # Pad fft with zeroes
 
     print('Sample buffering: {} .. {} per {}Hz (fs)'.format(nperseg, nfft, fs))
-
-    M = 1000 # window size 
-    w = windows.tukey(M)
-    hop = int(M*0.1)
-
+    
     spt = ShortTimeFFT.from_window('hann', fs, nperseg=nperseg,
                                noverlap=nperseg // 2, mfft=nfft, scale_to='psd')
     sxx = spt.spectrogram(tr.data)  # perform the spectrogram
 
     t = spt.t(len(tr.data))
     f = spt.f
-
+    
     # OBSOLETE:
     
     # f, t, sxx = signal.spectrogram(
-    #    tr.data, fs, nperseg=nperseg, window='hann', noverlap=nperseg // 2, scaling=spectral_scaling, nfft=nfft
+    #    tr.data, fs, nperseg=nperseg, window='hann', noverlap=nperseg // 2, nfft=nfft
     # )
 
     """
