@@ -26,11 +26,6 @@ from obspy import UTCDateTime
 from obspy.clients.fdsn import Client
 from scipy import signal
 from scipy.signal import ShortTimeFFT, windows, iirnotch, filtfilt
-import scipy.integrate as integrate 
-from scipy.interpolate import make_interp_spline
-from scipy.fftpack import fft, ifft
-from scipy.linalg import svd
-
 
 from . import __version__
     
