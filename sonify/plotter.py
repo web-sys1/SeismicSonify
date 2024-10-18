@@ -25,6 +25,12 @@ from obspy.signal.util import next_pow_2
 from obspy import UTCDateTime
 from obspy.clients.fdsn import Client
 from scipy import signal
+from scipy.signal import ShortTimeFFT, windows, iirnotch, filtfilt
+import scipy.integrate as integrate 
+from scipy.interpolate import make_interp_spline
+from scipy.fftpack import fft, ifft
+from scipy.linalg import svd
+
 
 from . import __version__
     
@@ -75,7 +81,6 @@ def seisPlotter(
     starttime=None,
     endtime=None,
     remove_response=None,
-    output_disposal=None,
     pre_filt=None,
     filter_type='bandpass',
     h_freq=0.88,
@@ -145,7 +150,7 @@ def seisPlotter(
     if not output_dir.exists():
         raise FileNotFoundError(f'Directory {output_dir} does not exist!')
     
-    if type=='FDSN':
+    if type=='fdsn':
      print('Retrieving data...')
      client = Client(fdsn_client, debug=True, timeout=300)
      st = client.get_waveforms(
@@ -156,8 +161,11 @@ def seisPlotter(
         starttime=starttime - PAD,
         endtime=endtime + PAD,
     )
-    elif type=='local':
-     st = obspy.read(file)
+    elif type=='file':
+     st = obspy.read(file, starttime=starttime, endtime=endtime)
+     if network is not None and station is not None and channel is not None:
+        print('Selecting..')
+        st.select(network=network, station=station, channel=channel)
     print('Done')
 
     # Merge Traces with the same IDs
@@ -166,7 +174,7 @@ def seisPlotter(
     if st.count() != 1:
         warnings.warn('Stream contains more than one Trace. Using first entry!')
         for tr in st:
-            print(tr.id)
+          print(tr.id)
     tr = st[0]
     
     # Now that we have just one Trace, get inventory (which has response info)
@@ -240,28 +248,21 @@ def seisPlotter(
                   freq_peak
                   )
     # If you do not specify 'remove_response', then: set the parameter to 0 (int zero) to skip removal.
-    output_units = ['ACC', 'DEF', 'DISP']
 
-    if remove_response==1:
+    if remove_response == 1:
      tr.remove_response(inventory=inv, pre_filt=pre_filt)  # Units are m/s OR Pa after response removal. 
      # By default, when remove_response set to 1, then result is equivalent to what the scale is.
      tr.detrend('demean')
      tr.taper(max_percentage=None, max_length=PAD / 2)  # Taper away some of PAD
      
-    elif remove_response==2: # These output types are 'ACC', 'DEF', 'DISP'.
-     if output_disposal=='ACC' in output_units:
+    elif remove_response == 2: # These output types are 'ACC', 'DEF', 'DISP'.
        tr.remove_response(inventory=inv, output='ACC', pre_filt=pre_filt)
-     elif output_disposal=='DEF' in output_units:
+    elif remove_response == 3:
        tr.remove_response(inventory=inv, output='DEF', pre_filt=pre_filt)       
-     elif output_disposal=='DISP' in output_units:
+    elif remove_response == 4:
        tr.remove_response(inventory=inv, output='DISP', pre_filt=pre_filt)
-     elif output_disposal is None:
-       raise Exception("Parameter 'output_disposal' required. Please specify: 'ACC', 'DEF', 'DISP'")
-     elif output_disposal not in output_units:
-       raise ValueError("'{0}' not a exact value".format(output_units))
-       
-    elif remove_response==3: # It removes sensitivity. Recommended for strong-motion measurements.
-     tr.remove_sensitivity(inventory=inv)
+    elif remove_response == 5: # It removes sensitivity. Recommended for strong-motion measurements.
+       tr.remove_sensitivity(inventory=inv)
      
     elif remove_response==0:
      print("Skipping response removal...")
@@ -408,10 +409,22 @@ def _spectrogram(
 
     print('Sample buffering: {} .. {} per {}Hz (fs)'.format(nperseg, nfft, fs))
 
+    M = 1000 # window size 
+    w = windows.tukey(M)
+    hop = int(M*0.1)
 
-    f, t, sxx = signal.spectrogram(
-        tr.data, fs, nperseg=nperseg, window='hann', noverlap=nperseg // 2, scaling=spectral_scaling, nfft=nfft
-    )
+    spt = ShortTimeFFT.from_window('hann', fs, nperseg=nperseg,
+                               noverlap=nperseg // 2, mfft=nfft, scale_to='psd')
+    sxx = spt.spectrogram(tr.data)  # perform the spectrogram
+
+    t = spt.t(len(tr.data))
+    f = spt.f
+
+    # OBSOLETE:
+    
+    # f, t, sxx = signal.spectrogram(
+    #    tr.data, fs, nperseg=nperseg, window='hann', noverlap=nperseg // 2, scaling=spectral_scaling, nfft=nfft
+    # )
 
     """
     plt.psd(tr.data, NFFT=nfft, Fs=fs,
@@ -460,8 +473,10 @@ def _spectrogram(
     #wf_ax.patch.set_alpha(0.7)
     wf_progress = wf_ax.plot(np.nan, np.nan, 'black', linewidth=wf_lw)[0]
     spec_ax.set_alpha(0.2)
-    wf_ax.set_ylabel(ylab)
+    wf_ax.set_ylabel(ylab, fontsize=8)
     wf_ax.grid(linestyle=':')
+    spec_ax.yaxis.set_tick_params(labelsize=8)
+    wf_ax.yaxis.set_tick_params(labelsize=8)
     max_value = np.abs(wf_t.copy().trim(starttime, endtime).data).max() * rescale
     
     if unit_scale == 'auto':
@@ -478,7 +493,7 @@ def _spectrogram(
         t_mpl, f, sxx_db, cmap=colormap, shading='nearest', rasterized=True
     )
 
-    spec_ax.set_ylabel('Frequency (Hz)')
+    spec_ax.set_ylabel('Frequency (Hz)', fontsize=8)
     spec_ax.grid(linestyle=':')
     spec_ax.set_ylim(freq_lim)
     if log:
@@ -555,7 +570,7 @@ def _spectrogram(
            wf_ax.set_title(f'{tr.id} - {tr.stats.endtime}', family='JetBrains Mono')
            
     fig.tight_layout()
-    fig.subplots_adjust(hspace=0, wspace=0.05)
+    fig.subplots_adjust(hspace=0.02, wspace=0.05)
     
     
     if switchaxes == True:
@@ -679,6 +694,16 @@ class _UTCDateFormatter(mdates.ConciseDateFormatter):
             offset.set_horizontalalignment('center')
             offset.set_x(0.5)
 
+class FigureWrapper(object):
+    '''Frees underlying figure when it goes out of scope.'''            
+    def __init__(self, figure):
+        self._figure = figure
+    def __enter__(self):
+        plt.close(self._figure)
+    def __del__(self):
+        self._figure.clf()
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        print('Figure removed')
 
 def main():
     """
